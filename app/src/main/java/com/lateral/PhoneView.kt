@@ -26,6 +26,7 @@ object PhoneView : InputManager.InputDeviceListener, DisplayManager.DisplayListe
     private val listeners = linkedSetOf<() -> Unit>()
     val active get() = policy.active
     val eligible get() = policy.eligible
+    val canEnter get() = policy.canEnter
     var exiting = false
         private set
 
@@ -79,6 +80,7 @@ object PhoneView : InputManager.InputDeviceListener, DisplayManager.DisplayListe
     fun refresh() {
         val wasActive = active
         val wasEligible = eligible
+        val couldEnter = canEnter
         val keyboard = InputDevice.getDeviceIds().any { id ->
             InputDevice.getDevice(id)?.let {
                 !it.isVirtual && it.isExternal && it.keyboardType == InputDevice.KEYBOARD_TYPE_ALPHABETIC
@@ -86,7 +88,8 @@ object PhoneView : InputManager.InputDeviceListener, DisplayManager.DisplayListe
         }
         policy.update(keyboard, BeastActivity.findExternalDisplay(app) != null)
         if (!eligible) offer.clear()
-        if (wasActive != active || wasEligible != eligible) {
+        if (wasActive != active || wasEligible != eligible || couldEnter != canEnter) {
+            android.util.Log.i("PhoneView", "devices: keyboard=$keyboard canEnter=$canEnter active=$active (was $wasActive)")
             PrivilegedService.setHotkeyMonitoringEnabled(!active)
             listeners.toList().forEach { it() }
         }
@@ -123,8 +126,19 @@ object PhoneView : InputManager.InputDeviceListener, DisplayManager.DisplayListe
         if (exiting) return
         refresh()
         val before = active
-        if (enabled && eligible) com.lateral.beast.HostedTextInputSession.close()
-        policy.setActive(enabled)
+        val bridgeReady = !enabled || PrivilegedService.isBridgeReady()
+        if (enabled && !bridgeReady) {
+            PrivilegedService.ensureRunning()
+            android.widget.Toast.makeText(activity,
+                "PhoneView needs the ADB input bridge. Connect or pair it in PhoneUI, then try again.",
+                android.widget.Toast.LENGTH_LONG).show()
+            android.util.Log.w("PhoneView", "entry blocked: bridge=${PrivilegedService.state}")
+            listeners.toList().forEach { it() }
+            return
+        }
+        if (enabled && canEnter) com.lateral.beast.HostedTextInputSession.close()
+        policy.setActive(enabled, bridgeReady)
+        android.util.Log.i("PhoneView", "manual/accepted entry=$enabled active=$active bridgeReady=$bridgeReady")
         PrivilegedService.setHotkeyMonitoringEnabled(!active)
         if (before != active) listeners.toList().forEach { it() }
         if (active) {

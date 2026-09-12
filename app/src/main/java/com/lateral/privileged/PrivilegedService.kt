@@ -198,6 +198,9 @@ object PrivilegedService {
     }
 
     fun addListener(listener: () -> Unit) = listeners.add(listener)
+    /** Validate the live helper, not just a potentially stale UI state. */
+    fun isBridgeReady(): Boolean = state == State.READY &&
+        runCatching { service?.asBinder()?.pingBinder() == true }.getOrDefault(false)
     fun removeListener(listener: () -> Unit) = listeners.remove(listener)
 
     private fun computeInitialState(context: Context): State = when {

@@ -50,14 +50,14 @@ object ExternalDisplayPanel {
         val phoneView = Switch(context).apply {
             text = "PhoneView — workspace on phone"
             isChecked = PhoneView.active
-            isEnabled = PhoneView.eligible || PhoneView.active
+            isEnabled = PhoneView.canEnter || PhoneView.active
         }
         val phoneViewHint = TextView(context).apply {
-            text = "Requires an external keyboard and no external display. Disconnecting the keyboard or connecting a display exits PhoneView."
+            text = "Open manually with or without a keyboard; a working ADB input bridge is required. Connecting a keyboard offers PhoneView when no external display is connected. Disconnecting a connected keyboard or connecting a display exits PhoneView."
             setTextColor(Color.rgb(150, 162, 166))
         }
         val phoneViewListener: () -> Unit = {
-            phoneView.isEnabled = PhoneView.eligible || PhoneView.active
+            phoneView.isEnabled = PhoneView.canEnter || PhoneView.active
             if (phoneView.isChecked != PhoneView.active) phoneView.isChecked = PhoneView.active
         }
         PhoneView.addListener(phoneViewListener)

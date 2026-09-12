@@ -40,3 +40,14 @@ Nubia's retained crash report identifies `Dialog.dismiss` from `PhoneView.onInpu
 - API 35 emulator: pause the visible offer, disconnect the keyboard, reconnect and accept; the same app process remained alive. Changed both ratio fields to 1:1 and increased supersampling/UI/hosted scales to 2.00/2.00/1.40. Re-entered the scaled workspace, disconnected the keyboard, and confirmed return to PhoneUI without a new crash. The detached OEM-window exception itself is injected in the unit test, not reproduced on demand in the emulator.
 
 Verified crash-fix candidate: `build/releases/LATERAL_-0.2.11-phoneview-crashfix.apk`, SHA-256 `49D5A0B31D98533FD8A9AAF82B6E35FF6FA3F9B3904E20045827EEACC478D934`. Version remains 0.2.11 (6); this is an updated candidate, not a published release.
+
+## Follow-up: manual entry and workspace focus
+
+The user still observed the issue after the popup fix. Nubia recorded no newer exception; later exits were classified as task removal. Emulator testing reproduced a separate failure: restoring a hosted task exposed Home, then Android removed the hidden PhoneView task. The helper only recognized MainActivity as the phone workspace, and its repair always launched MainActivity even when given PhoneView's task ID.
+
+The helper now recognizes both workspace activities and focuses the exact existing PhoneView task. Manual PhoneView entry no longer requires a keyboard; keyboard detection still offers entry, keyboard disconnection exits an attached-keyboard session, and external displays prevent entry/exit PhoneView. Entry requires both READY state and a successful live helper Binder ping. An unavailable bridge initiates connection recovery and leaves the user in PhoneUI to pair/connect and retry.
+
+- All 31 unit tests and the SDK-free stable release build passed, without delegation.
+- Emulator verified missing-bridge entry rejection, manual keyboard-free entry with a live bridge, and hosted-app restoration without losing PhoneView.
+- From PhoneView's own Display dialog, verified both persisted ratios at 1:1, lowered and increased UI scale, and lowered/increased hosted scale. Workspace remained resumed with UI 1.95×, hosted 1.40×, supersampling 2×, with no new process crash.
+- Candidate: `build/releases/LATERAL_-0.2.11-phoneview-focus.apk`. This supersedes the popup-only candidate; physical Nubia scaling confirmation is still required.

@@ -1593,7 +1593,7 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         val phoneTopTaskId = topTaskIdOnDisplay(Display.DEFAULT_DISPLAY)
         val preservePhoneFocus = observedTasks().any {
             it.taskId == phoneTaskId && it.displayId == Display.DEFAULT_DISPLAY &&
-                it.packageName == PHONE_UI_PACKAGE && it.className == PHONE_UI_ACTIVITY
+                PhoneWorkspaceFocusPolicy.accepts(it.packageName, it.className, PHONE_UI_PACKAGE)
         }
         Log.i(
             TAG,
@@ -1652,7 +1652,7 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         val topTaskId = topTaskIdOnDisplay(Display.DEFAULT_DISPLAY) ?: return null
         return observedTasks().firstOrNull {
             it.taskId == topTaskId && it.displayId == Display.DEFAULT_DISPLAY &&
-                it.packageName == PHONE_UI_PACKAGE && it.className == PHONE_UI_ACTIVITY
+                PhoneWorkspaceFocusPolicy.accepts(it.packageName, it.className, PHONE_UI_PACKAGE)
         }?.taskId
     }
 
@@ -1710,7 +1710,15 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
     /** Focus an already-running PhoneUI task without moving or recreating it. */
     private fun focusPhoneTask(phoneTaskId: Int): Boolean {
         if (topTaskIdOnDisplay(Display.DEFAULT_DISPLAY) == phoneTaskId) return true
-        runVerbose(
+        val task = observedTasks().firstOrNull {
+            it.taskId == phoneTaskId && it.displayId == Display.DEFAULT_DISPLAY &&
+                PhoneWorkspaceFocusPolicy.accepts(it.packageName, it.className, PHONE_UI_PACKAGE)
+        } ?: return false
+        if (task.className == PhoneWorkspaceFocusPolicy.PHONE_VIEW_ACTIVITY) {
+            // PhoneView is not exported. Focus its exact existing task; starting MainActivity
+            // here would replace the workspace during surface reattach/scaling.
+            runVerbose("am", "task", "focus", phoneTaskId.toString())
+        } else runVerbose(
             "am", "start", "--display", Display.DEFAULT_DISPLAY.toString(),
             "-n", PHONE_UI_COMPONENT, "-a", PHONE_UI_FOCUS_ACTION,
             "-f", PHONE_UI_REPAIR_FLAGS,
