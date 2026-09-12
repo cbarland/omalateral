@@ -4,6 +4,14 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DisplayProfileTest {
+    @Test fun fiveTimesHostedScalePersistsAndIsTheUpperBound() {
+        val data = mutableMapOf<String, Float>()
+        val store = DisplayProfileStore({ k, d -> data[k] ?: d }, { data.putAll(it) })
+        val key = DisplayProfileKey("phone", 1080, 2424)
+        store.save(key, DisplayProfile(hostedScale = 5f))
+        assertEquals(5f, store.load(key, DisplayProfile()).hostedScale, .0001f)
+        assertEquals(5f, DisplayProfile(hostedScale = 10f).sanitized().hostedScale, .0001f)
+    }
     @Test fun ratioSyntaxAndValidation() {
         assertEquals(9f / 19.5f, DisplayProfile.parseAspect("9:19.5")!!, .0001f)
         assertEquals(4f / 3f, DisplayProfile.parseAspect(" 4 : 3 ")!!, .0001f)

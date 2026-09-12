@@ -6,7 +6,7 @@ Display settings in both PhoneUI and BeastUI now contain:
 - Tablet-style app aspect ratio (width:height).
 - Supersampling (1–2×).
 - Linked UI + text scale (85–200%, up to 500% on ultrawide modes).
-- Hosted app scale (60–140%).
+- Hosted app scale (60–500%).
 
 These controls have been removed from the general Settings panel. Enter ratios such as `9:19.5`, `9:16`, `4:3`, or `16:10`, then select Apply aspect ratios. Ratios between 1:4 and 3:1 are supported. The ratio applies to app content, excluding card borders and title bars; fullscreen still fills the workspace. Narrow title bars scroll horizontally to keep controls reachable. The workspace toolbar has overflow arrows for larger UI scales.
 
@@ -51,3 +51,17 @@ The helper now recognizes both workspace activities and focuses the exact existi
 - Emulator verified missing-bridge entry rejection, manual keyboard-free entry with a live bridge, and hosted-app restoration without losing PhoneView.
 - From PhoneView's own Display dialog, verified both persisted ratios at 1:1, lowered and increased UI scale, and lowered/increased hosted scale. Workspace remained resumed with UI 1.95×, hosted 1.40×, supersampling 2×, with no new process crash.
 - Candidate: `build/releases/LATERAL_-0.2.11-phoneview-focus.apk`. This supersedes the popup-only candidate; physical Nubia scaling confirmation is still required.
+
+## Corrected opt-in, native ribbon clicks, and 5× hosted scale
+
+The manual-entry interpretation above was incorrect. The Display switch now persists an opt-in preference (initially off), independently of keyboard presence. Enabling without a keyboard does not launch PhoneView. With opt-in enabled, keyboard detection without an external screen shows the confirmation popup; only acceptance with a live bridge enters. Disconnection exits the session but keeps the preference armed. Turning the switch off exits and suppresses offers.
+
+Native primary mouse clicks on ribbon controls now retain their target through DOWN/UP and invoke the normal click action, avoiding interception by the horizontal scrolling container. Mouse movement beyond touch slop, cancellation, and release outside the target do not click. Hosted-app input is unchanged. Emulator mouse events reproduced the original +APPS failure and verified +APPS and Display after the fix.
+
+This uncovered another high-scale crash: the launcher used a scaled minimum height larger than the landscape viewport's maximum. Popup dimensions now prioritize available space, with regression coverage for the observed 920px minimum/842px maximum.
+
+Hosted scaling now supports 5× in controls, persisted profiles, density calculations, and the renderer's minimum buffer scale. Emulator verified 5.00× with 1:1 ratios and actual resized hosted displays. All 37 tests and the SDK-free stable release build passed.
+
+Open issue: Show All accepts a mouse click but exposed Home during the emulator's multi-app transition; exact workspace focus was restored manually to continue tests. Do not consider that interaction verified or the release ready based on this candidate.
+
+Candidate: `build/releases/LATERAL_-0.2.11-phoneview-optin.apk` (version 0.2.11/6, not published).

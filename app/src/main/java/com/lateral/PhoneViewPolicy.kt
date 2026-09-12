@@ -1,7 +1,15 @@
 package com.lateral
 
-/** Keyboard detection offers entry; manual entry only requires no external display. */
+/** The preference arms keyboard offers; only accepting an eligible offer enters. */
 internal class PhoneViewPolicy {
+    var enabled = false
+        private set
+    fun setEnabled(value: Boolean) {
+        if (enabled == value) return
+        enabled = value
+        offered = false
+        if (!value) active = false
+    }
     var eligible = false
         private set
     var active = false
@@ -23,7 +31,7 @@ internal class PhoneViewPolicy {
     }
 
     fun takeOffer(): Boolean {
-        if (!eligible || active || offered) return false
+        if (!enabled || !eligible || active || offered) return false
         offered = true
         return true
     }
@@ -31,7 +39,7 @@ internal class PhoneViewPolicy {
     fun offerPresentationFailed() { offered = false }
 
     fun setActive(value: Boolean, bridgeReady: Boolean = false): Boolean {
-        active = value && canEnter && bridgeReady
+        active = value && enabled && eligible && bridgeReady
         if (eligible) offered = true
         return active
     }

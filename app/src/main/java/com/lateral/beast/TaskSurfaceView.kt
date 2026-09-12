@@ -51,7 +51,7 @@ class TaskSurfaceView @JvmOverloads constructor(
         }
     var renderScale: Float = HostedAppDensity.renderScale(1f, 1.25f)
         set(value) {
-            val next = value.coerceIn(.5f, HostedAppDensity.MAX_RENDER_SCALE)
+            val next = value.coerceIn(HostedAppDensity.MIN_RENDER_SCALE, HostedAppDensity.MAX_RENDER_SCALE)
             if (field == next) return
             field = next
             surfaceTexture?.let { configureBuffer(it, width, height) }

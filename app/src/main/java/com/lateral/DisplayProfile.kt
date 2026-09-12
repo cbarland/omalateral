@@ -17,7 +17,7 @@ data class DisplayProfile(
         tabletAspect = tabletAspect.safe(.25f, 3f, 1.45f),
         supersampling = supersampling.safe(1f, 2f, 1.25f),
         uiScale = uiScale.safe(.85f, 5f, 1.1f),
-        hostedScale = hostedScale.safe(.6f, 1.4f, 1f),
+        hostedScale = hostedScale.safe(.6f, 5f, 1f),
     )
     companion object {
         fun parseAspect(text: String): Float? {

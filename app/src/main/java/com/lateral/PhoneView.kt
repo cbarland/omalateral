@@ -25,6 +25,7 @@ object PhoneView : InputManager.InputDeviceListener, DisplayManager.DisplayListe
     private val offer = OwnedPopup<AlertDialog> { it.dismiss() }
     private val listeners = linkedSetOf<() -> Unit>()
     val active get() = policy.active
+    val enabled get() = policy.enabled
     val eligible get() = policy.eligible
     val canEnter get() = policy.canEnter
     var exiting = false
@@ -52,6 +53,7 @@ object PhoneView : InputManager.InputDeviceListener, DisplayManager.DisplayListe
 
     fun init(application: Application) {
         app = application
+        policy.setEnabled(app.getSharedPreferences("phone_view", 0).getBoolean("enabled", false))
         app.getSystemService(InputManager::class.java).registerInputDeviceListener(this, handler)
         app.getSystemService(DisplayManager::class.java).registerDisplayListener(this, handler)
         app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
@@ -117,17 +119,27 @@ object PhoneView : InputManager.InputDeviceListener, DisplayManager.DisplayListe
         // Override automatic button dismissal: dispose before launching/pausing the owner.
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
             offer.clear()
-            setEnabled(activity, true)
+            enterAfterOffer(activity)
         }
         dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener { offer.clear() }
     }
 
     fun setEnabled(activity: Activity, enabled: Boolean) {
+        policy.setEnabled(enabled)
+        app.getSharedPreferences("phone_view", 0).edit().putBoolean("enabled", enabled).apply()
+        if (!enabled) offer.clear()
+        PrivilegedService.setHotkeyMonitoringEnabled(!active)
+        listeners.toList().forEach { it() }
+        refresh()
+    }
+
+    private fun enterAfterOffer(activity: Activity) {
         if (exiting) return
         refresh()
         val before = active
-        val bridgeReady = !enabled || PrivilegedService.isBridgeReady()
-        if (enabled && !bridgeReady) {
+        if (!enabled || !eligible || activity.isFinishing || activity.isDestroyed) return
+        val bridgeReady = PrivilegedService.isBridgeReady()
+        if (!bridgeReady) {
             PrivilegedService.ensureRunning()
             android.widget.Toast.makeText(activity,
                 "PhoneView needs the ADB input bridge. Connect or pair it in PhoneUI, then try again.",
@@ -137,7 +149,7 @@ object PhoneView : InputManager.InputDeviceListener, DisplayManager.DisplayListe
             return
         }
         if (enabled && canEnter) com.lateral.beast.HostedTextInputSession.close()
-        policy.setActive(enabled, bridgeReady)
+        policy.setActive(true, bridgeReady)
         android.util.Log.i("PhoneView", "manual/accepted entry=$enabled active=$active bridgeReady=$bridgeReady")
         PrivilegedService.setHotkeyMonitoringEnabled(!active)
         if (before != active) listeners.toList().forEach { it() }

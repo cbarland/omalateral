@@ -7,6 +7,7 @@ internal object HostedAppDensity {
     const val MAX_RENDER_DPI = 1280
     private const val DEFAULT_PRESENTATION_SCALE = .78f
     const val MAX_RENDER_SCALE = 2f / (DEFAULT_PRESENTATION_SCALE * .6f)
+    const val MIN_RENDER_SCALE = 1f / (DEFAULT_PRESENTATION_SCALE * 5f)
     private const val MIN_DPI = 72
     private const val MAX_DPI = 640
 
@@ -24,7 +25,7 @@ internal object HostedAppDensity {
 
     fun renderScale(userScale: Float, supersampling: Float): Float =
         supersampling.coerceIn(1f, 2f) /
-            (DEFAULT_PRESENTATION_SCALE * userScale.coerceIn(.6f, 1.4f))
+            (DEFAULT_PRESENTATION_SCALE * userScale.coerceIn(.6f, 5f))
 
     fun supersampledDensity(densityDpi: Int, supersampling: Float): Int =
         (densityDpi.coerceIn(MIN_DPI, MAX_DPI) * supersampling.coerceIn(1f, 2f))

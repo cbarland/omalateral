@@ -67,6 +67,6 @@ internal class DisplayProfileControls(context: Context) : LinearLayout(context) 
         }
         slider("Supersampling", profile.supersampling, 1f, 2f, .05f) { p, v -> p.copy(supersampling = v) }
         slider("UI + text scale", profile.uiScale, .85f, if (next.key.width >= 3000) 5f else 2f, .05f) { p, v -> p.copy(uiScale = v) }
-        slider("Hosted app scale", profile.hostedScale, .6f, 1.4f, .05f) { p, v -> p.copy(hostedScale = v) }
+        slider("Hosted app scale", profile.hostedScale, .6f, 5f, .05f) { p, v -> p.copy(hostedScale = v) }
     }
 }

@@ -4,20 +4,34 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PhoneViewPolicyTest {
-    @Test fun manualEntryWithoutKeyboardSurvivesDeviceRefresh() {
+    @Test fun disabledPreferenceNeverOffersAndDisablingExits() {
         val policy = PhoneViewPolicy()
+        policy.update(true, false)
+        assertFalse(policy.takeOffer())
+        assertFalse(policy.setActive(true, true))
+        policy.setEnabled(true)
+        assertFalse(policy.active)
+        assertTrue(policy.takeOffer())
+        assertTrue(policy.setActive(true, true))
+        policy.setEnabled(false)
+        assertFalse(policy.active)
+        assertFalse(policy.takeOffer())
+    }
+
+    @Test fun armingWithoutKeyboardDoesNotOfferOrEnter() {
+        val policy = PhoneViewPolicy().apply { setEnabled(true) }
         policy.update(false, false)
         assertFalse(policy.takeOffer())
         assertTrue(policy.canEnter)
-        assertTrue(policy.setActive(true, true))
+        assertFalse(policy.setActive(true, true))
         repeat(10) { policy.update(false, false) }
-        assertTrue(policy.active)
+        assertFalse(policy.active)
         policy.update(false, true)
         assertFalse(policy.active)
     }
 
-    @Test fun missingBridgeBlocksManualAndOfferedEntry() {
-        val policy = PhoneViewPolicy()
+    @Test fun missingBridgeBlocksAcceptedEntry() {
+        val policy = PhoneViewPolicy().apply { setEnabled(true) }
         policy.update(false, false)
         assertFalse(policy.setActive(true, false))
         policy.update(true, false)
@@ -27,7 +41,7 @@ class PhoneViewPolicyTest {
     }
 
     @Test fun failedPresentationAllowsRetryWithoutReconnectingKeyboard() {
-        val policy = PhoneViewPolicy()
+        val policy = PhoneViewPolicy().apply { setEnabled(true) }
         policy.update(true, false)
         assertTrue(policy.takeOffer())
         policy.offerPresentationFailed()
@@ -36,7 +50,7 @@ class PhoneViewPolicyTest {
     }
 
     @Test fun keyboardWithoutDisplayOffersOnceAndAllowsManualEntryAfterDecline() {
-        val policy = PhoneViewPolicy()
+        val policy = PhoneViewPolicy().apply { setEnabled(true) }
         policy.update(true, false)
         assertTrue(policy.takeOffer())
         assertFalse(policy.takeOffer())
@@ -47,7 +61,7 @@ class PhoneViewPolicyTest {
     }
 
     @Test fun keyboardRemovalExitsAndReconnectOffersAgain() {
-        val policy = PhoneViewPolicy()
+        val policy = PhoneViewPolicy().apply { setEnabled(true) }
         policy.update(true, false)
         policy.setActive(true, true)
         policy.update(false, false)
@@ -58,7 +72,7 @@ class PhoneViewPolicyTest {
     }
 
     @Test fun externalDisplayAlwaysWinsIncludingSimultaneousKeyboardConnection() {
-        val policy = PhoneViewPolicy()
+        val policy = PhoneViewPolicy().apply { setEnabled(true) }
         policy.update(true, false)
         policy.setActive(true, true)
         policy.update(true, true)
@@ -72,7 +86,7 @@ class PhoneViewPolicyTest {
     }
 
     @Test fun repeatedDeviceNotificationsDoNotExitOrOfferAgain() {
-        val policy = PhoneViewPolicy()
+        val policy = PhoneViewPolicy().apply { setEnabled(true) }
         policy.update(true, false)
         policy.setActive(true, true)
         repeat(10) { policy.update(true, false) }

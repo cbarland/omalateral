@@ -4,6 +4,13 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class HostedAppDensityTest {
+    @Test fun `five times hosted scale is not clipped at the old renderer minimum`() {
+        for (sampling in listOf(1f, 1.25f, 2f)) {
+            val scale = HostedAppDensity.renderScale(5f, sampling)
+                .coerceIn(HostedAppDensity.MIN_RENDER_SCALE, HostedAppDensity.MAX_RENDER_SCALE)
+            assertEquals(5f, sampling / (.78f * scale), .0001f)
+        }
+    }
     @Test
     fun `supersampling preserves size at high source density without clipping raster dpi`() {
         for (density in listOf(320, 420, 560, 640)) {

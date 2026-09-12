@@ -430,6 +430,45 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         }
     }
 
+    private var ribbonMouseTarget: View? = null
+    private var ribbonMouseDownX = 0f
+    private var ribbonMouseDownY = 0f
+    private var ribbonMouseCancelled = false
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (phoneViewSession && event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
+            if (event.actionMasked == MotionEvent.ACTION_DOWN && event.buttonState == MotionEvent.BUTTON_PRIMARY) {
+                // Native mouse DOWN can be consumed by the ribbon's HorizontalScrollView.
+                // Resolve only shell controls here, never a hosted app or modal window.
+                val target = if (::toolbar.isInitialized)
+                    findBeastHoverTarget(toolbar, event.rawX.toInt(), event.rawY.toInt()) else null
+                ribbonMouseTarget = target?.takeIf { it.isClickable }
+                if (ribbonMouseTarget != null) {
+                    ribbonMouseDownX = event.rawX
+                    ribbonMouseDownY = event.rawY
+                    ribbonMouseCancelled = false
+                    ribbonMouseTarget?.isPressed = true
+                    return true
+                }
+            }
+            ribbonMouseTarget?.let { target ->
+                val slop = android.view.ViewConfiguration.get(this).scaledTouchSlop
+                if (kotlin.math.abs(event.rawX - ribbonMouseDownX) > slop ||
+                    kotlin.math.abs(event.rawY - ribbonMouseDownY) > slop) ribbonMouseCancelled = true
+                if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                    ribbonMouseTarget = null
+                    target.isPressed = false
+                    val bounds = Rect()
+                    if (event.actionMasked == MotionEvent.ACTION_UP && !ribbonMouseCancelled &&
+                        target.isShown && target.isEnabled && target.getGlobalVisibleRect(bounds) &&
+                        bounds.contains(event.rawX.toInt(), event.rawY.toInt())) target.performClick()
+                }
+                return true
+            }
+        }
+        return super.dispatchTouchEvent(event)
+    }
+
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_SCROLL &&
             event.isFromSource(android.view.InputDevice.SOURCE_CLASS_POINTER)
@@ -1575,11 +1614,11 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             paint.measureText(it.loadLabel(packageManager).toString().lowercase())
         } ?: 0f
         val desiredWidth = (widestLabel + uiDp(150)).toInt()
-        val maxWidth = minOf(root.width - uiDp(48), uiDp(760)).coerceAtLeast(uiDp(260))
-        val width = desiredWidth.coerceIn(uiDp(300).coerceAtMost(maxWidth), maxWidth)
+        val maxWidth = minOf(root.width - uiDp(48), uiDp(760))
+        val width = popupDimension(desiredWidth, uiDp(300), maxWidth)
         val desiredHeight = uiDp(120) + launcherResults.measuredHeight
         val maxHeight = minOf((root.height * .78f).toInt(), uiDp(760))
-        val height = desiredHeight.coerceIn(uiDp(180), maxHeight)
+        val height = popupDimension(desiredHeight, uiDp(180), maxHeight)
         launcherPanel.layoutParams = (launcherPanel.layoutParams as FrameLayout.LayoutParams).apply {
             this.width = width
             this.height = height
