@@ -1,0 +1,32 @@
+# Workspace display profiles
+
+Display settings in both PhoneUI and BeastUI now contain:
+
+- Phone-style app aspect ratio (width:height).
+- Tablet-style app aspect ratio (width:height).
+- Supersampling (1–2×).
+- Linked UI + text scale (85–200%, up to 500% on ultrawide modes).
+- Hosted app scale (60–140%).
+
+These controls have been removed from the general Settings panel. Enter ratios such as `9:19.5`, `9:16`, `4:3`, or `16:10`, then select Apply aspect ratios. Ratios between 1:4 and 3:1 are supported. The ratio applies to app content, excluding card borders and title bars; fullscreen still fills the workspace. Narrow title bars scroll horizontally to keep controls reachable. The workspace toolbar has overflow arrows for larger UI scales.
+
+## Persistence and identity
+
+Each profile is saved in `lateral_display_profiles`, keyed by display identity and the active physical mode width/height. Refresh-rate changes at the same resolution share a profile; rotated window bounds do not create a new profile.
+
+The built-in screen has a dedicated PhoneView identity. External screens use public Android display/product identifiers (name, manufacturer, product and model year where available), falling back to display name. Android's temporary display number is not used. Identical devices without publicly exposed distinguishing identifiers share a profile; changing an OEM-provided display name may create a new profile.
+
+PhoneUI edits the connected external workspace profile, or the PhoneView profile when no external screen is connected. Display dialogs refresh their target on connection/mode changes. An edit started against an old target cannot be saved into the newly connected display's profile.
+
+Unsaved profiles inherit the old global hosted/supersampling values and standard/ultrawide UI defaults. New profile edits do not change those legacy defaults, so preferences do not leak between displays. Existing app task identity and presentation mode remain unchanged.
+
+## Validation, 2026-09-12
+
+- SDK-free release build/lint and all 21 unit tests passed. Four new tests cover ratio parsing and invalid values, round-trip persistence of all five fields, display/resolution/PhoneView isolation, legacy defaults, and bounded invalid values.
+- Pixel_9/API 35 emulator: edited PhoneView supersampling to 1.85×, UI/text to 1.50×, and hosted scale to 1.20×. Values survived app restart and switching to/from simulated external displays.
+- External 1920×1080 retained its separate defaults, saved 1.55× supersampling, and restored it after switching to 3840×1200. The ultrawide profile had its own default UI scale and separate supersampling value. Runtime display numbers changed without losing the profile.
+- Saved phone ratio 9:16 and tablet ratio 4:3 survived APK update. Actual hosted virtual displays measured 692×1231 and 1642×1231 respectively (integer rounding), confirming settings affect app geometry.
+- At 1.5× UI scale, toolbar overflow exposes Display and Settings without overlap; narrow-card horizontal scrolling exposes the presentation switch. Phone/tablet switching resized the existing hosted display.
+- Public identity implementation builds and runs without invoking Android's blocked hidden getUniqueId API. No physical Nubia/VITURE mode-switch validation was performed.
+
+Candidate APK: `build/releases/LATERAL_-0.2.11-display-profiles.apk`. Publication remains on hold; this supersedes the earlier PhoneView-only release candidate.

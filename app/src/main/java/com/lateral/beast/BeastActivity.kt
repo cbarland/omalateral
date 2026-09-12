@@ -189,7 +189,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         configuration -> runOnUiThread {
             // This resizes only hosted virtual displays. Beast chrome retains its own
             // per-mode controls while app density follows relative window height.
-            cards.values.forEach { it.phoneAppConfiguration = configuration }
+            cards.values.forEach { it.phoneAppConfiguration = phoneAppConfiguration() }
         }
     }
     private val launcherSearchListener: () -> Unit = {
@@ -275,9 +275,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         window.setStatusBarColor(Color.TRANSPARENT)
         window.setNavigationBarColor(Color.TRANSPARENT)
         InputSettings.load(applicationContext)
-        val initialUltrawide = display?.mode?.physicalWidth?.let { it >= 3000 } ?: false
-        uiElementScale = InputSettings.uiScale(initialUltrawide)
-        uiFontScale = InputSettings.fontScale(initialUltrawide)
+        uiElementScale = displayProfile().uiScale
+        uiFontScale = uiElementScale
         displayManager = getSystemService(DisplayManager::class.java)
         apps = loadApps()
         buildUi()
@@ -291,6 +290,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         WorkspaceCursor.addListener(cursorListener)
         WorkspaceCursor.addScrollListener(cursorScrollListener)
         InputSettings.addAppearanceListener(appearanceListener)
+        com.lateral.DisplayPreferences.addListener(appearanceListener)
         InputSettings.addPhoneAppConfigurationListener(phoneAppConfigurationListener)
         LauncherSearchSession.addListener(launcherSearchListener)
         PrivilegedService.addListener(privilegedListener)
@@ -344,6 +344,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         WorkspaceCursor.removeListener(cursorListener)
         WorkspaceCursor.removeScrollListener(cursorScrollListener)
         InputSettings.removeAppearanceListener(appearanceListener)
+        com.lateral.DisplayPreferences.removeListener(appearanceListener)
         InputSettings.removePhoneAppConfigurationListener(phoneAppConfigurationListener)
         LauncherSearchSession.removeListener(launcherSearchListener)
         PrivilegedService.removeListener(privilegedListener)
@@ -720,13 +721,13 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         val ultrawide = mode != null && mode.physicalWidth >= 3000
         // Hardware mode changes can bypass PhoneUI. Keep the persisted setting and
         // its switch in sync with the physical Beast timing whenever we observe it.
-        if (InputSettings.ultrawideEnabled != ultrawide) {
+        if (!phoneViewSession && InputSettings.ultrawideEnabled != ultrawide) {
             InputSettings.setUltrawideEnabled(applicationContext, ultrawide)
         }
-        val nextElementScale = InputSettings.uiScale(ultrawide)
+        val nextElementScale = displayProfile().uiScale
         val elementScaleChanged = kotlin.math.abs(uiElementScale - nextElementScale) >= .01f
         uiElementScale = nextElementScale
-        val nextFontScale = InputSettings.fontScale(ultrawide)
+        val nextFontScale = nextElementScale
         val fontScaleChanged = kotlin.math.abs(uiFontScale - nextFontScale) >= .01f
         uiFontScale = nextFontScale
         cards.values.forEach(BeastTaskCard::refreshAccent)
@@ -810,13 +811,18 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         return (physicalScaleY / physicalScaleX).coerceIn(.40f, 1f)
     }
 
+    private fun displayProfile() = com.lateral.DisplayPreferences.load(
+        this, com.lateral.DisplayPreferences.target(this, display
+            ?: getSystemService(DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)),
+    )
+
     private fun phoneAppConfiguration(): InputSettings.PhoneAppConfiguration =
         InputSettings.PhoneAppConfiguration(
             InputSettings.phoneAppDensityDpi,
             InputSettings.phoneFontScale,
             InputSettings.phoneAppWindowHeightPx,
-            InputSettings.hostedAppScale,
-            InputSettings.displaySupersampling,
+            displayProfile().hostedScale,
+            displayProfile().supersampling,
         )
 
     /** Converts the logical Beast canvas height into physical panel pixels. */
@@ -952,20 +958,15 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     private fun updateTaskSizes() {
         val cardHeight = workspaceScroll.height - taskStrip.paddingTop - taskStrip.paddingBottom
-        val appContentHeight = cardHeight - uiDp(APP_DECORATOR_HEIGHT_DP) -
+        val appContentHeight = cardHeight - (dp(APP_DECORATOR_HEIGHT_DP) * uiElementScale.coerceIn(.85f, 1.15f)).roundToInt() -
             dp(OMARCHY_WINDOW_BORDER_DP) * 2
         if (appContentHeight <= 0) return
         // Derive width from the actual app surface height remaining after the unified
         // UI/text scale has laid out the toolbar, taskbar, strip padding, and decorator.
-        val minimumDecoratorWidth = uiDp(APP_DECORATOR_MIN_WIDTH_DP)
-        val phoneWidth = maxOf(
-            (appContentHeight * 9f / 19.5f).roundToInt(),
-            minimumDecoratorWidth,
-        )
-        val tabletWidth = maxOf(
-            (appContentHeight * 1.45f).roundToInt(),
-            minimumDecoratorWidth,
-        )
+        val profile = displayProfile()
+        val border = dp(OMARCHY_WINDOW_BORDER_DP) * 2
+        val phoneWidth = (appContentHeight * profile.phoneAspect).roundToInt().coerceAtLeast(1) + border
+        val tabletWidth = (appContentHeight * profile.tabletAspect).roundToInt().coerceAtLeast(1) + border
         WorkspaceState.tasks.filter {
             it.placement == TaskPlacement.BEAST_VISIBLE ||
                 it.placement == TaskPlacement.PENDING_BEAST
@@ -1126,18 +1127,29 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             setPadding(uiDp(10), 0, uiDp(10), 0)
             setBeastClick(::showInputSettings)
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, uiDp(28)))
-        toolbar.addView(controls, FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            alignmentGravity(InputSettings.toolbarAlignment),
+        (0 until controls.childCount).forEach { (controls.getChildAt(it) as? TextView)?.setSingleLine(true) }
+        val toolScroll = HorizontalScrollView(this).apply {
+            isFillViewport = true
+            isHorizontalScrollBarEnabled = true
+            addView(controls, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT,
+                alignmentGravity(InputSettings.toolbarAlignment),
+            ))
+        }
+        val toolRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        fun step(symbol: String, direction: Int) = label(symbol, TOOLBAR_TEXT_SIZE, ACCENT).apply {
+            gravity = Gravity.CENTER
+            contentDescription = if (direction < 0) "Earlier toolbar controls" else "Later toolbar controls"
+            setBeastClick { toolScroll.smoothScrollBy((toolScroll.width * .75f * direction).roundToInt(), 0) }
+        }
+        toolRow.addView(step("‹", -1), LinearLayout.LayoutParams(uiDp(18), ViewGroup.LayoutParams.MATCH_PARENT))
+        toolRow.addView(toolScroll, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+        toolRow.addView(step("›", 1), LinearLayout.LayoutParams(uiDp(18), ViewGroup.LayoutParams.MATCH_PARENT))
+        toolbar.addView(toolRow, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT,
         ).apply {
-            // Centered tools must use the full toolbar width. Asymmetric side
-            // reservations make the apparent center drift when UI scale changes.
-            when (InputSettings.toolbarAlignment) {
-                BarAlignment.LEFT -> marginStart = uiDp(76)
-                BarAlignment.RIGHT -> marginEnd = uiDp(220)
-                BarAlignment.CENTER -> Unit
-            }
+            marginStart = uiDp(76)
+            marginEnd = uiDp(220)
         })
         toolbar.addView(label("LATERAL_", TOOLBAR_TEXT_SIZE, Color.rgb(178, 188, 187), bold = true).apply {
             gravity = Gravity.CENTER_VERTICAL or Gravity.START
@@ -1829,6 +1841,12 @@ internal class BeastTaskCard(
 
     private val column = LinearLayout(context)
     private val chrome = FrameLayout(context)
+    private val chromeScroll = object : HorizontalScrollView(context) {
+        override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+            if (event.actionMasked == MotionEvent.ACTION_DOWN) parent?.requestDisallowInterceptTouchEvent(true)
+            return super.dispatchTouchEvent(event)
+        }
+    }.apply { isFillViewport = true }
     private val appLabel = TextView(context)
     private val modeButton = TextView(context)
     private val leftControls = LinearLayout(context)
@@ -1983,7 +2001,9 @@ internal class BeastTaskCard(
         chrome.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             updateNavigationVisibility()
         }
-        column.addView(chrome, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)))
+        chrome.minimumWidth = decoratorDp(LEFT_CONTROLS_WIDTH_DP + CENTER_NAVIGATION_WIDTH_DP + RIGHT_CONTROLS_WIDTH_DP + 12)
+        chromeScroll.addView(chrome, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        column.addView(chromeScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)))
         column.addView(surface, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         addView(column, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         fullscreenExit.text = "[T]"
@@ -2137,9 +2157,10 @@ internal class BeastTaskCard(
         if (!::backButton.isInitialized || !::captureAppButton.isInitialized) return
         chrome.setPadding(decoratorDp(8), 0, decoratorDp(4), 0)
         applyWindowBorder()
-        chrome.layoutParams?.let {
+        chrome.minimumWidth = decoratorDp(LEFT_CONTROLS_WIDTH_DP + CENTER_NAVIGATION_WIDTH_DP + RIGHT_CONTROLS_WIDTH_DP + 12)
+        chromeScroll.layoutParams?.let {
             it.height = decoratorDp(30)
-            chrome.layoutParams = it
+            chromeScroll.layoutParams = it
         }
         controls.forEach { control ->
             control.layoutParams?.let {

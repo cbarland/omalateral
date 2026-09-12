@@ -29,6 +29,7 @@ depend on the phone firmware, so re-test the privileged path after system update
 
 ## What it does
 
+- **Display profiles** remember phone/tablet aspect ratios, supersampling, UI + text scale and hosted-app scale separately for each display and resolution. All controls live in Display. See [profile behavior and validation](docs/DISPLAY_PROFILES.md).
 - **PhoneView** runs BeastUI fullscreen in landscape on the phone with an external keyboard and native Android mouse input. Enable it in Display settings when no external display is connected. Keyboard removal or display connection automatically restores traditional mode. See [PhoneView behavior and validation](docs/PHONEVIEW.md).
 - **PhoneUI** provides the touchpad, cursor, app launcher, task navigator, scale controls, and input settings.
 - **BeastUI** is an ordered horizontal workspace for apps on the glasses, with task decorators, taskbar tabs, minimization, fullscreen, screenshots, and a launcher overlay.

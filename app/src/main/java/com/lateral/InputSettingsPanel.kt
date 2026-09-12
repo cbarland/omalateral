@@ -103,89 +103,6 @@ object InputSettingsPanel {
             { InputSettings.pinchZoomSensitivity },
             { InputSettings.setPinchZoomSensitivity(context, it) },
         )
-        val hostedAppScale = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            val valueLabel = TextView(context).apply {
-                typeface = Typeface.MONOSPACE
-                setTextColor(Color.rgb(210, 220, 218))
-            }
-            fun update(value: Float) {
-                valueLabel.text = "Hosted app scale  ${"%.0f".format(value * 100)}%"
-            }
-            update(InputSettings.hostedAppScale)
-            addView(valueLabel)
-            addView(SeekBar(context).apply {
-                max = 80
-                progress = ((InputSettings.hostedAppScale - .6f) * 100).toInt()
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
-                        val value = .6f + progress / 100f
-                        InputSettings.setHostedAppScale(context, value)
-                        update(value)
-                    }
-                    override fun onStartTrackingTouch(bar: SeekBar) = Unit
-                    override fun onStopTrackingTouch(bar: SeekBar) = Unit
-                })
-            })
-        }
-        val displaySupersampling = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            val valueLabel = TextView(context).apply {
-                typeface = Typeface.MONOSPACE
-                setTextColor(Color.rgb(210, 220, 218))
-            }
-            fun update(value: Float) {
-                valueLabel.text = "Supersampling  ${"%.2f".format(value)}×"
-            }
-            update(InputSettings.displaySupersampling)
-            addView(valueLabel)
-            addView(SeekBar(context).apply {
-                max = 20
-                progress = ((InputSettings.displaySupersampling - 1f) * 20).toInt()
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
-                        val value = 1f + progress / 20f
-                        InputSettings.setDisplaySupersampling(context, value)
-                        update(value)
-                    }
-                    override fun onStartTrackingTouch(bar: SeekBar) = Unit
-                    override fun onStopTrackingTouch(bar: SeekBar) = Unit
-                })
-            })
-            addView(TextView(context).apply {
-                text = "Higher values improve hosted-app edge and text rendering without changing effective size."
-                textSize = 11f
-                setTextColor(Color.rgb(178, 188, 187))
-            })
-        }
-        fun appearanceSlider(title: String, ultrawide: Boolean): LinearLayout {
-            val row = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-            val valueLabel = TextView(context).apply {
-                typeface = Typeface.MONOSPACE
-                setTextColor(Color.rgb(210, 220, 218))
-            }
-            fun current() = InputSettings.uiScale(ultrawide)
-            fun update(value: Float) {
-                valueLabel.text = "$title  ${"%.0f".format(value * 100)}%"
-            }
-            update(current())
-            row.addView(valueLabel)
-            row.addView(SeekBar(context).apply {
-                // One locked geometry/text scale per display mode.
-                max = if (ultrawide) 415 else 115
-                progress = ((current() - .85f) * 100).toInt()
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
-                        val value = .85f + progress / 100f
-                        InputSettings.setUiScale(context, ultrawide, value)
-                        update(value)
-                    }
-                    override fun onStartTrackingTouch(bar: SeekBar) = Unit
-                    override fun onStopTrackingTouch(bar: SeekBar) = Unit
-                })
-            })
-            return row
-        }
         val invertTwoFingerScroll = Switch(context).apply {
             text = "Invert two-finger scroll"
             isChecked = InputSettings.invertTwoFingerScroll
@@ -346,10 +263,6 @@ object InputSettingsPanel {
         panel.addView(showPhoneTaskbar)
         panel.addView(toolbarAlignment)
         panel.addView(taskbarAlignment)
-        panel.addView(hostedAppScale)
-        panel.addView(displaySupersampling)
-        panel.addView(appearanceSlider("UI + text scale · Standard", ultrawide = false))
-        panel.addView(appearanceSlider("UI + text scale · Ultrawide", ultrawide = true))
         panel.addView(personalizationTitle)
         panel.addView(accentWheel)
         panel.addView(accentPreview)

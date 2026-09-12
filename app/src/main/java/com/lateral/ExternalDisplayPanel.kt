@@ -69,6 +69,8 @@ object ExternalDisplayPanel {
         }
         panel.addView(phoneView)
         panel.addView(phoneViewHint)
+        val profileControls = DisplayProfileControls(context)
+        panel.addView(profileControls)
         val displayInfo = TextView(context).apply {
             typeface = Typeface.MONOSPACE
             setTextColor(Color.rgb(210, 220, 218))
@@ -187,6 +189,7 @@ object ExternalDisplayPanel {
         }
 
         fun refresh() {
+            profileControls.refresh()
             val display = currentDisplay()
             val mode = display?.mode
             val connected = display != null && display.state == Display.STATE_ON && mode != null
