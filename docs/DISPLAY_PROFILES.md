@@ -65,3 +65,19 @@ Hosted scaling now supports 5× in controls, persisted profiles, density calcula
 Open issue: Show All accepts a mouse click but exposed Home during the emulator's multi-app transition; exact workspace focus was restored manually to continue tests. Do not consider that interaction verified or the release ready based on this candidate.
 
 Candidate: `build/releases/LATERAL_-0.2.11-phoneview-optin.apk` (version 0.2.11/6, not published).
+
+## Show All focus and deliberate Android navigation
+
+The preceding Show All focus issue is fixed in `LATERAL_-0.2.11-navigation-focus.apk`. Recovery now reads live running tasks, including PhoneView when absent from Recents, and consistently uses leaf task IDs (not Home's containing root-task ID).
+
+Focus recovery is limited to a foreground-originated, 2.5-second transaction. It may repair transient Home, never an unrelated app or unknown foreground. Android Home/Recents broadcasts revoke the transaction and invalidate pending callbacks. A new foreground workspace interaction is required to re-arm recovery. The navigation listener runs in the app process on its own thread and forwards cancellation directly over Binder, not behind queued launches. The helper leaves recovery disabled unless the app confirms listener registration. A standalone helper receiver was tested and discarded because Android did not deliver navigation broadcasts to it.
+
+Validation (API 35 emulator, no delegation):
+
+- All 43 unit tests passed, including six recovery-gate tests for cancellation, expiry, unrelated apps, unknown foreground, fresh interactions and stale batch callbacks.
+- Native-mouse Show All left PhoneView foreground after hosted apps settled, including after returning from Home and re-arming via a fresh interaction.
+- Home and Recents navigation produced `homekey`/`recentapps` cancellation logs; Recents stayed open beyond the recovery window.
+- With a simulated external display, stable PhoneUI could leave via Home and Recents without being pulled back. Selecting Android Settings from Recents left Settings foreground on subsequent checks.
+- No new app-process crash during these tests. The simulated display and keyboard were removed after testing; the separate emulator dev build was stopped to prevent display ownership interference.
+
+SHA-256: `11EAEA5E667589078B768C8568C5D3CDDC84AD78B5E4E62466B985D44C4CCDC5`. Built and tested locally only; not installed on Nubia or published. Physical Nubia navigation validation remains outstanding. Reload the APK and its ADB helper together.

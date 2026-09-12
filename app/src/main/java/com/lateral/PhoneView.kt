@@ -53,6 +53,26 @@ object PhoneView : InputManager.InputDeviceListener, DisplayManager.DisplayListe
 
     fun init(application: Application) {
         app = application
+        // The app process receives system navigation broadcasts; standalone app_process
+        // helpers are not registered Android application receivers on every OS release.
+        val navigationThread = android.os.HandlerThread("lateral-navigation").apply { start() }
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context, intent: Intent) {
+                PrivilegedService.cancelPhoneFocusRecovery()
+                android.util.Log.i("PhoneView", "Android navigation cancels focus recovery: ${intent.getStringExtra("reason")}")
+            }
+        }
+        try {
+            val filter = android.content.IntentFilter(Intent.ACTION_CLOSE_SYSTEM_DIALOGS)
+            if (android.os.Build.VERSION.SDK_INT >= 33)
+                app.registerReceiver(receiver, filter, null, Handler(navigationThread.looper), android.content.Context.RECEIVER_EXPORTED)
+            else app.registerReceiver(receiver, filter, null, Handler(navigationThread.looper))
+            PrivilegedService.setPhoneNavigationObserverReady(true)
+        } catch (error: RuntimeException) {
+            navigationThread.quitSafely()
+            PrivilegedService.setPhoneNavigationObserverReady(false)
+            android.util.Log.e("PhoneView", "Navigation observer unavailable; focus recovery disabled", error)
+        }
         policy.setEnabled(app.getSharedPreferences("phone_view", 0).getBoolean("enabled", false))
         app.getSystemService(InputManager::class.java).registerInputDeviceListener(this, handler)
         app.getSystemService(DisplayManager::class.java).registerDisplayListener(this, handler)

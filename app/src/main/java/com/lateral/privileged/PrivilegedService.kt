@@ -198,6 +198,18 @@ object PrivilegedService {
     }
 
     fun addListener(listener: () -> Unit) = listeners.add(listener)
+    @Volatile private var navigationObserverReady = false
+    fun setPhoneNavigationObserverReady(ready: Boolean) {
+        navigationObserverReady = ready
+        runCatching { service?.setPhoneNavigationObserverReady(ready) }
+    }
+    fun cancelPhoneFocusRecovery() {
+        // Direct Binder call: never queue Home behind a slow hosted-app launch.
+        runCatching { service?.clearPhoneTouchGuard() }
+    }
+    fun allowPhoneFocusRecovery(taskId: Int) {
+        runCatching { service?.allowPhoneFocusRecovery(taskId) }
+    }
     /** Validate the live helper, not just a potentially stale UI state. */
     fun isBridgeReady(): Boolean = state == State.READY &&
         runCatching { service?.asBinder()?.pingBinder() == true }.getOrDefault(false)
@@ -404,6 +416,7 @@ object PrivilegedService {
             runCatching { previous.exit() }
         }
         service = IPrivilegedService.Stub.asInterface(binder)
+        runCatching { service?.setPhoneNavigationObserverReady(navigationObserverReady) }
         // Clear a preferred external route written by older LATERAL_ builds. The phone's
         // system audio policy owns the active route (including the user's "This Phone"
         // selection); LATERAL_ must never overwrite it with USB/wired routing.

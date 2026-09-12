@@ -380,6 +380,11 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         super.onPause()
     }
 
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        PrivilegedService.allowPhoneFocusRecovery(MainActivity.currentPhoneTaskId())
+    }
+
     override fun onDisplayAdded(displayId: Int) = keepOnExternalDisplay()
     override fun onDisplayRemoved(displayId: Int) {
         keepOnExternalDisplay()
@@ -444,6 +449,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
                     findBeastHoverTarget(toolbar, event.rawX.toInt(), event.rawY.toInt()) else null
                 ribbonMouseTarget = target?.takeIf { it.isClickable }
                 if (ribbonMouseTarget != null) {
+                    onUserInteraction()
                     ribbonMouseDownX = event.rawX
                     ribbonMouseDownY = event.rawY
                     ribbonMouseCancelled = false

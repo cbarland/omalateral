@@ -186,4 +186,7 @@ interface IPrivilegedService {
     /** Restore PhoneUI only when display 0 is still exposing Home after a task transition. */
     boolean restorePhoneTaskIfStillHome(int phoneTaskId) = 46;
     void nativeKey(int displayId, int action, int keyCode, int repeatCount, int metaState, long downTime, long eventTime) = 47;
+    /** Re-arm transaction recovery only after a fresh foreground workspace interaction. */
+    void allowPhoneFocusRecovery(int phoneTaskId) = 48;
+    void setPhoneNavigationObserverReady(boolean ready) = 49;
 }

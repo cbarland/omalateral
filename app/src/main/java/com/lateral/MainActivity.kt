@@ -342,6 +342,11 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         AndroidTaskSynchronizer.requestImmediate()
     }
 
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        PrivilegedService.allowPhoneFocusRecovery(currentPhoneTaskId())
+    }
+
     override fun onPause() {
         activityResumed = false
         if (::connectionText.isInitialized) {

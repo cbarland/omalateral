@@ -74,6 +74,8 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
     /** Serializes the short post-transaction focus lease on the helper main loop. */
     private val phoneFocusHandler by lazy { Handler(Looper.getMainLooper()) }
     private var phoneFocusLeaseGeneration = 0
+    private val focusRecovery = FocusRecoveryGate()
+    @Volatile private var navigationObserverReady = false
 
     /** Shizuku instantiates the user service with this constructor when a Context is available. */
     @Suppress("unused")
@@ -224,6 +226,8 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         activityName: String,
     ): Boolean {
         val phoneTaskId = phoneUiTaskOnDefaultDisplay()
+        if (phoneTaskId != null && navigationObserverReady)
+            focusRecovery.begin(phoneTaskId, phoneTaskId, SystemClock.uptimeMillis())
         Log.i(
             "Lateral/Launch",
             "11) helper.launchOnDisplay pkg=$packageName/$activityName display=$displayId " +
@@ -1150,10 +1154,9 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
 
     override fun restorePhoneTaskIfStillHome(phoneTaskId: Int): Boolean {
         val topTaskId = topTaskIdOnDisplay(Display.DEFAULT_DISPLAY)
-        if (topTaskId == phoneTaskId) {
-            schedulePhoneFocusLease(phoneTaskId)
-            return true
-        }
+        if (topTaskId == phoneTaskId) return true
+        val ticket = focusRecovery.ticket(phoneTaskId, SystemClock.uptimeMillis()) ?: return false
+        if (!canRecoverPhoneFocus(phoneTaskId, ticket)) return false
 
         val top = observedTasks().firstOrNull { it.taskId == topTaskId }
         if (top?.activityType != ACTIVITY_TYPE_HOME) {
@@ -1591,23 +1594,23 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         phoneTaskId: Int,
     ): Int {
         val phoneTopTaskId = topTaskIdOnDisplay(Display.DEFAULT_DISPLAY)
-        val preservePhoneFocus = observedTasks().any {
+        val workspaceExists = observedTasks().any {
             it.taskId == phoneTaskId && it.displayId == Display.DEFAULT_DISPLAY &&
                 PhoneWorkspaceFocusPolicy.accepts(it.packageName, it.className, PHONE_UI_PACKAGE)
         }
+        val ticket = if (workspaceExists && navigationObserverReady)
+            focusRecovery.begin(phoneTaskId, phoneTopTaskId, SystemClock.uptimeMillis()) else null
+        val preservePhoneFocus = ticket != null
         Log.i(
             TAG,
             "focus transaction target=$taskId->$beastDisplayId phone=$phoneTaskId " +
                 "phoneTop=$phoneTopTaskId preserve=$preservePhoneFocus",
         )
-        if (preservePhoneFocus && !focusPhoneTask(phoneTaskId)) {
-            return RESTORE_PHONE_FOCUS_FAILED
-        }
         if (!startRecentTaskOnDisplay(taskId, beastDisplayId)) {
             return RESTORE_TARGET_FAILED
         }
 
-        if (!preservePhoneFocus) {
+        if (ticket == null || !canRecoverPhoneFocus(phoneTaskId, ticket)) {
             return if (verifyTargetPlacement(taskId, beastDisplayId)) {
                 RESTORE_SUCCESS
             } else {
@@ -1625,8 +1628,27 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         return RESTORE_SUCCESS
     }
 
-    /** Retained as a no-op for AIDL transaction compatibility with already-running clients. */
-    override fun clearPhoneTouchGuard() = Unit
+    /** Retained AIDL slot also cancels stale focus authority. */
+    override fun clearPhoneTouchGuard() { focusRecovery.userNavigation() }
+    override fun setPhoneNavigationObserverReady(ready: Boolean) {
+        navigationObserverReady = ready
+        if (!ready) focusRecovery.userNavigation()
+    }
+
+    override fun allowPhoneFocusRecovery(phoneTaskId: Int) {
+        if (!navigationObserverReady) return
+        if (observedTasks().any { it.taskId == phoneTaskId && it.displayId == Display.DEFAULT_DISPLAY &&
+                PhoneWorkspaceFocusPolicy.accepts(it.packageName, it.className, PHONE_UI_PACKAGE) }) {
+            focusRecovery.userInteraction(phoneTaskId, topTaskIdOnDisplay(Display.DEFAULT_DISPLAY))
+        }
+    }
+
+    private fun canRecoverPhoneFocus(phoneTaskId: Int, ticket: Long): Boolean {
+        if (!navigationObserverReady) return false
+        val top = topTaskIdOnDisplay(Display.DEFAULT_DISPLAY)
+        val home = observedTasks().any { it.taskId == top && it.activityType == ACTIVITY_TYPE_HOME }
+        return focusRecovery.permits(phoneTaskId, ticket, top, home, SystemClock.uptimeMillis())
+    }
 
     private data class ObservedTask(
         val taskId: Int,
@@ -1636,17 +1658,16 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         val className: String,
     )
 
-    private fun observedTasks(): List<ObservedTask> = getTaskSnapshots().mapNotNull { encoded ->
-        val fields = encoded.split('\t')
-        if (fields.size < 14 || fields[0] != "v1") return@mapNotNull null
-        ObservedTask(
-            taskId = fields[1].toIntOrNull() ?: return@mapNotNull null,
-            displayId = fields[6].toIntOrNull() ?: return@mapNotNull null,
-            activityType = fields[9].toIntOrNull() ?: 0,
-            packageName = fields[12],
-            className = fields[13],
-        )
-    }
+    private fun observedTasks(): List<ObservedTask> = runCatching {
+        readRunningTasks(activityTaskManagerService()).mapNotNull { task ->
+            val component = taskField(task, "topActivity", "baseActivity") as? ComponentName ?: return@mapNotNull null
+            val configuration = taskField(task, "configuration")
+            val window = configuration?.javaClass?.getField("windowConfiguration")?.get(configuration)
+            val type = window?.javaClass?.getMethod("getActivityType")?.invoke(window).intValue(0)
+            ObservedTask(taskField(task, "taskId", "id").intValue(-1),
+                taskField(task, "displayId").intValue(-1), type, component.packageName, component.className)
+        }
+    }.getOrDefault(emptyList())
 
     private fun phoneUiTaskOnDefaultDisplay(): Int? {
         val topTaskId = topTaskIdOnDisplay(Display.DEFAULT_DISPLAY) ?: return null
@@ -1688,18 +1709,19 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
 
     /** Keep PhoneUI top while a Beast-originated task transition settles. */
     private fun schedulePhoneFocusLease(phoneTaskId: Int) {
+        val ticket = focusRecovery.ticket(phoneTaskId, SystemClock.uptimeMillis()) ?: return
         val generation = ++phoneFocusLeaseGeneration
         val expiresAt = SystemClock.uptimeMillis() + PHONE_FOCUS_LEASE_MS
         fun check() {
             if (generation != phoneFocusLeaseGeneration || SystemClock.uptimeMillis() >= expiresAt) return
+            if (!canRecoverPhoneFocus(phoneTaskId, ticket)) return
             val topTaskId = taskOnDisplay(Display.DEFAULT_DISPLAY)
             if (topTaskId == phoneTaskId) {
                 phoneFocusHandler.postDelayed(::check, PHONE_FOCUS_LEASE_POLL_MS)
                 return
             }
-            // The lease only exists for a Beast task transaction that began while
-            // PhoneUI owned display 0, so any intervening top task belongs to that
-            // transaction and must not replace PhoneUI.
+            // Only transient Home is recoverable. Explicit navigation revokes the
+            // ticket on a separate looper even while a task move is in progress.
             Log.d(TAG, "focus lease repairing display 0 top=$topTaskId")
             focusPhoneTask(phoneTaskId)
             phoneFocusHandler.postDelayed(::check, PHONE_FOCUS_LEASE_POLL_MS)
@@ -1710,6 +1732,8 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
     /** Focus an already-running PhoneUI task without moving or recreating it. */
     private fun focusPhoneTask(phoneTaskId: Int): Boolean {
         if (topTaskIdOnDisplay(Display.DEFAULT_DISPLAY) == phoneTaskId) return true
+        val ticket = focusRecovery.ticket(phoneTaskId, SystemClock.uptimeMillis()) ?: return false
+        if (!canRecoverPhoneFocus(phoneTaskId, ticket)) return false
         val task = observedTasks().firstOrNull {
             it.taskId == phoneTaskId && it.displayId == Display.DEFAULT_DISPLAY &&
                 PhoneWorkspaceFocusPolicy.accepts(it.packageName, it.className, PHONE_UI_PACKAGE)
@@ -1730,22 +1754,8 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         return false
     }
 
-    private fun topTaskIdOnDisplay(displayId: Int): Int? {
-        val dump = runCapture("dumpsys", "activity", "activities") ?: return null
-        var inDisplay = false
-        for (raw in dump.lineSequence()) {
-            val line = raw.trim()
-            if (line.startsWith("Display #")) {
-                val id = line.removePrefix("Display #").takeWhile(Char::isDigit).toIntOrNull()
-                if (inDisplay && id != displayId) return null
-                inDisplay = id == displayId
-            } else if (inDisplay && line.startsWith("* Task{")) {
-                return TASK_ID_IN_DUMP.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
-            }
-        }
-        return null
-    }
-
+    // Live leaf task identity also works for Home's nested root/task hierarchy.
+    private fun topTaskIdOnDisplay(displayId: Int): Int? = taskOnDisplay(displayId)
     /** Run a shell command and return its standard output, or `null` if it could not run. */
     private fun runCapture(vararg command: String): String? {
         return try {
