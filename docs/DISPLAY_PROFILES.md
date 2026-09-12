@@ -30,3 +30,13 @@ Unsaved profiles inherit the old global hosted/supersampling values and standard
 - Public identity implementation builds and runs without invoking Android's blocked hidden getUniqueId API. No physical Nubia/VITURE mode-switch validation was performed.
 
 Candidate APK: `build/releases/LATERAL_-0.2.11-display-profiles.apk`. Publication remains on hold; this supersedes the earlier PhoneView-only release candidate.
+
+## PhoneView crash fix, 2026-09-12
+
+Nubia's retained crash report identifies `Dialog.dismiss` from `PhoneView.onInputDeviceRemoved`: the offer window had already detached. This is not evidence of a scaling allocation failure. Popup ownership now tracks the Activity explicitly, clears before dismissal, cleans up on pause/destroy, and dismisses before the entry transition. Only the known detached-window exception is suppressed. Failed window-token presentation permits a later offer retry.
+
+- Independent sub-agent review completed; both identified edge cases addressed.
+- SDK-free stable release build/lint and all 27 unit tests passed. Six added tests cover detached-window cleanup, owner identity, reentrancy, late callbacks, unrelated exceptions, and failed-presentation retry.
+- API 35 emulator: pause the visible offer, disconnect the keyboard, reconnect and accept; the same app process remained alive. Changed both ratio fields to 1:1 and increased supersampling/UI/hosted scales to 2.00/2.00/1.40. Re-entered the scaled workspace, disconnected the keyboard, and confirmed return to PhoneUI without a new crash. The detached OEM-window exception itself is injected in the unit test, not reproduced on demand in the emulator.
+
+Verified crash-fix candidate: `build/releases/LATERAL_-0.2.11-phoneview-crashfix.apk`, SHA-256 `49D5A0B31D98533FD8A9AAF82B6E35FF6FA3F9B3904E20045827EEACC478D934`. Version remains 0.2.11 (6); this is an updated candidate, not a published release.

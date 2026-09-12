@@ -4,6 +4,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PhoneViewPolicyTest {
+    @Test fun failedPresentationAllowsRetryWithoutReconnectingKeyboard() {
+        val policy = PhoneViewPolicy()
+        policy.update(true, false)
+        assertTrue(policy.takeOffer())
+        policy.offerPresentationFailed()
+        assertTrue(policy.takeOffer())
+        assertFalse(policy.takeOffer())
+    }
+
     @Test fun keyboardWithoutDisplayOffersOnceAndAllowsManualEntryAfterDecline() {
         val policy = PhoneViewPolicy()
         policy.update(true, false)

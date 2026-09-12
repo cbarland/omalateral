@@ -22,6 +22,8 @@ internal class PhoneViewPolicy {
         return true
     }
 
+    fun offerPresentationFailed() { offered = false }
+
     fun setActive(value: Boolean): Boolean {
         active = value && eligible
         if (eligible) offered = true

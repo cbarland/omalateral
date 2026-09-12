@@ -22,7 +22,7 @@ object PhoneView : InputManager.InputDeviceListener, DisplayManager.DisplayListe
     private val handler = Handler(Looper.getMainLooper())
     private val policy = PhoneViewPolicy()
     private var foreground = WeakReference<Activity>(null)
-    private var offer: AlertDialog? = null
+    private val offer = OwnedPopup<AlertDialog> { it.dismiss() }
     private val listeners = linkedSetOf<() -> Unit>()
     val active get() = policy.active
     val eligible get() = policy.eligible
@@ -60,9 +60,10 @@ object PhoneView : InputManager.InputDeviceListener, DisplayManager.DisplayListe
             }
             override fun onActivityPaused(activity: Activity) {
                 if (foreground.get() === activity) foreground.clear()
+                offer.clearFor(activity)
             }
             override fun onActivityDestroyed(activity: Activity) {
-                if (offer?.context === activity) { offer?.dismiss(); offer = null }
+                offer.clearFor(activity)
             }
             override fun onActivityCreated(a: Activity, state: Bundle?) = Unit
             override fun onActivityStarted(a: Activity) = Unit
@@ -84,7 +85,7 @@ object PhoneView : InputManager.InputDeviceListener, DisplayManager.DisplayListe
             } == true
         }
         policy.update(keyboard, BeastActivity.findExternalDisplay(app) != null)
-        if (!eligible) { offer?.dismiss(); offer = null }
+        if (!eligible) offer.clear()
         if (wasActive != active || wasEligible != eligible) {
             PrivilegedService.setHotkeyMonitoringEnabled(!active)
             listeners.toList().forEach { it() }
@@ -94,16 +95,28 @@ object PhoneView : InputManager.InputDeviceListener, DisplayManager.DisplayListe
 
     private fun maybeOffer() {
         val activity = foreground.get() as? MainActivity ?: return
-        if (activity.isFinishing || activity.isDestroyed || offer != null || !policy.takeOffer()) return
-        offer = AlertDialog.Builder(activity)
+        if (activity.isFinishing || activity.isDestroyed || offer.current != null || !policy.takeOffer()) return
+        val dialog = AlertDialog.Builder(activity)
             .setTitle("PhoneView")
             .setMessage("View the LATERAL_ workspace on your phone with the connected keyboard and mouse?")
-            .setPositiveButton("Use PhoneView") { _, _ -> setEnabled(activity, true) }
+            .setPositiveButton("Use PhoneView", null)
             .setNegativeButton("Not now", null)
-            .create().also { dialog ->
-                dialog.setOnDismissListener { if (offer === dialog) offer = null }
-                dialog.show()
-            }
+            .create()
+        offer.attach(activity, dialog)
+        dialog.setOnDismissListener { offer.dismissed(dialog) }
+        try {
+            dialog.show()
+        } catch (_: android.view.WindowManager.BadTokenException) {
+            offer.clear()
+            policy.offerPresentationFailed()
+            return
+        }
+        // Override automatic button dismissal: dispose before launching/pausing the owner.
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            offer.clear()
+            setEnabled(activity, true)
+        }
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener { offer.clear() }
     }
 
     fun setEnabled(activity: Activity, enabled: Boolean) {
