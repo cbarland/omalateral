@@ -13,6 +13,7 @@ import android.view.Surface
 import android.view.TextureView
 import com.lateral.InputSettings
 import com.lateral.MainActivity
+import com.lateral.PhoneView
 import com.lateral.privileged.PrivilegedService
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.roundToInt
@@ -470,6 +471,32 @@ class TaskSurfaceView @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Reassert the complete producer/consumer geometry after the physical host display
+     * wakes. Some Android builds preserve the TextureView size across screen-off while
+     * silently restoring the hosted VirtualDisplay at stale app bounds; the cached-size
+     * guard in [resizeIfNeeded] cannot detect that external reset.
+     */
+    fun refreshAfterHostResume() {
+        if (released || !isAvailable || width <= 0 || height <= 0) return
+        val texture = surfaceTexture ?: return
+        val surface = outputSurface?.takeIf(Surface::isValid) ?: return
+        val id = displayId ?: return
+        val w = renderWidth()
+        val h = renderHeight()
+        configureBuffer(texture, width, height)
+        PrivilegedService.setVirtualDisplaySurface(id, surface)
+        PrivilegedService.resizeVirtualDisplay(id, w, h, targetDensityDpi)
+        lastWidth = w
+        lastHeight = h
+        lastDensityDpi = targetDensityDpi
+        if (!PrivilegedService.ensureHostedDisplayImeRouting(id)) {
+            rejectDisplayForImeRouting(id)
+            return
+        }
+        scheduleFrameWatchdog(surfaceGeneration)
+    }
+
     private fun rejectDisplayForImeRouting(id: Int?) {
         id?.let { PrivilegedService.releaseVirtualDisplay(it) }
         displayId = null
@@ -588,7 +615,10 @@ class TaskSurfaceView @JvmOverloads constructor(
     }
 
     private fun scheduleEditorProbe(displayId: Int) {
-        if (nativePhoneInput) return
+        // In the PhoneView/native-input context a connected external keyboard drives the
+        // hosted app directly; skip the probe only then. With no physical keyboard, fall
+        // back to the embedded software keyboard (the editor still needs detection).
+        if (nativePhoneInput && PhoneView.externalKeyboardPresent) return
         val generation = ++editorProbeGeneration
         fun probe(attempt: Int) {
             if (released || generation != editorProbeGeneration || this.displayId != displayId) return

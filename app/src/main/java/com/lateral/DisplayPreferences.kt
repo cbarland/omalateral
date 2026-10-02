@@ -49,10 +49,12 @@ object DisplayPreferences {
         // display's latest edits. Preserve previous standard/ultrawide defaults.
         val legacy = context.getSharedPreferences("lateral_input", Context.MODE_PRIVATE)
         val wide = target.key.identity.startsWith("external:") && target.key.width >= 3000
+        val legacySupersampling = "display_supersampling".takeIf(legacy::contains)
+            ?.let { legacy.getFloat(it, 1.25f) }
         val defaults = DisplayProfile(
             uiScale = legacy.getFloat(if (wide) "ultrawide_ui_scale" else "standard_ui_scale", if (wide) 1.5f else 1.1f),
             hostedScale = legacy.getFloat("hosted_app_scale", 1f),
-            supersampling = legacy.getFloat("display_supersampling", 1.25f),
+            supersampling = defaultSupersampling(target.key.identity, legacySupersampling),
         )
         return store(context).load(target.key, defaults)
     }
@@ -61,3 +63,7 @@ object DisplayPreferences {
         listeners.forEach { it() }
     }
 }
+
+/** New PhoneView profiles favor a safe raster size; explicit legacy choices still win. */
+internal fun defaultSupersampling(identity: String, legacyValue: Float?): Float =
+    legacyValue ?: if (identity == "phoneview:built-in") 1.5f else 1.25f

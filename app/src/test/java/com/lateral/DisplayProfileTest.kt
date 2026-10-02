@@ -52,4 +52,10 @@ class DisplayProfileTest {
         assertEquals(1.1f, profile.uiScale, .0001f)
         assertEquals(.6f, profile.hostedScale, .0001f)
     }
+
+    @Test fun newPhoneViewProfilesDefaultToOnePointFiveSampling() {
+        assertEquals(1.5f, defaultSupersampling("phoneview:built-in", null), .0001f)
+        assertEquals(1.25f, defaultSupersampling("external:beast", null), .0001f)
+        assertEquals(1f, defaultSupersampling("phoneview:built-in", 1f), .0001f)
+    }
 }

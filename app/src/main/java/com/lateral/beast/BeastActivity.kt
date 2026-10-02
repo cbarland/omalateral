@@ -3,6 +3,7 @@ package com.lateral.beast
 import com.lateral.BuildConfig
 
 import android.content.Context
+import android.content.res.Configuration
 import android.app.Dialog
 import android.app.ActivityOptions
 import android.content.Intent
@@ -137,6 +138,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private var lastScrollAt = 0L
     private var momentumTargetsLauncher = false
     private val controlDebouncer = BeastControlDebouncer()
+    private val shellControlKeys = java.util.WeakHashMap<View, String>()
+    private var shellMouseControlKey: String? = null
     private val beastDisplayModeController by lazy { BeastDisplayModeController(this) }
     private val screenshotController by lazy {
         BeastScreenshotController(
@@ -255,6 +258,32 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             }
         }
     }
+    private val resumeGeometryRefresh = Runnable {
+        if (!::root.isInitialized || isFinishing || isDestroyed) return@Runnable
+        // Screen locking and OEM display power-cycles can change insets or display metrics
+        // while this activity is paused. Rebuild framing from the current viewport instead
+        // of retaining card dimensions calculated before the lock screen appeared.
+        enterImmersiveMode()
+        applyAppearance()
+        root.requestLayout()
+        root.postOnAnimation {
+            if (isFinishing || isDestroyed || !::workspaceScroll.isInitialized) return@postOnAnimation
+            updateHorizontalAspectCorrection()
+            updateTaskSizes()
+            cards.values.forEach { it.renderedVerticalScale = renderedVerticalScale() }
+            val maxScroll = (taskStrip.width - workspaceScroll.width).coerceAtLeast(0)
+            workspaceScroll.scrollTo(
+                (maxScroll * WorkspaceState.viewportPosition).roundToInt(), 0,
+            )
+            syncViewportMap()
+            // Wait until card measurements have settled, then reassert each hosted
+            // producer's buffer/display geometry. This repairs the short, top-aligned
+            // app frame some devices restore after their screen powers back on.
+            workspaceScroll.postOnAnimation {
+                cards.values.forEach(BeastTaskCard::refreshAfterHostResume)
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -323,6 +352,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         if (phoneViewTaskId == taskId) phoneViewTaskId = -1
         if (::root.isInitialized) root.removeCallbacks(systemStatusTicker)
         if (::root.isInitialized) root.removeCallbacks(hoverUpdateFrame)
+        if (::root.isInitialized) root.removeCallbacks(resumeGeometryRefresh)
         beastHoverTarget?.let { updateBeastHover(it, false) }
         beastHoverTarget = null
         routedPointerCard?.cancelRoutedPointer()
@@ -367,6 +397,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         }
         displayManager.registerDisplayListener(this, null)
         root.post(::keepOnExternalDisplay)
+        root.removeCallbacks(resumeGeometryRefresh)
+        root.post(resumeGeometryRefresh)
         AndroidTaskSynchronizer.requestImmediate()
     }
 
@@ -404,10 +436,36 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideSystemKeyboard()
+        if (hasFocus) {
+            hideSystemKeyboard()
+            if (::root.isInitialized) {
+                root.removeCallbacks(resumeGeometryRefresh)
+                root.post(resumeGeometryRefresh)
+            }
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (::root.isInitialized) {
+            root.removeCallbacks(resumeGeometryRefresh)
+            root.post(resumeGeometryRefresh)
+        }
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (phoneViewSession && event.isCtrlPressed &&
+            (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
+                event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)
+        ) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                WorkspaceState.focusRelative(
+                    if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1,
+                )
+            }
+            // Consume DOWN, repeats, and UP so the hosted app never receives a partial chord.
+            return true
+        }
         if (phoneViewSession && launcher.visibility != View.VISIBLE &&
             !TransientPanelCoordinator.isActiveOnDisplay(Display.DEFAULT_DISPLAY) &&
             event.keyCode !in setOf(KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_HOME, KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN)
@@ -435,39 +493,48 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         }
     }
 
-    private var ribbonMouseTarget: View? = null
-    private var ribbonMouseDownX = 0f
-    private var ribbonMouseDownY = 0f
-    private var ribbonMouseCancelled = false
+    private var shellMouseTarget: View? = null
+    private var shellMouseDownX = 0f
+    private var shellMouseDownY = 0f
+    private var shellMouseCancelled = false
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        if (phoneViewSession && event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
+        if (event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
             if (event.actionMasked == MotionEvent.ACTION_DOWN && event.buttonState == MotionEvent.BUTTON_PRIMARY) {
-                // Native mouse DOWN can be consumed by the ribbon's HorizontalScrollView.
-                // Resolve only shell controls here, never a hosted app or modal window.
-                val target = if (::toolbar.isInitialized)
-                    findBeastHoverTarget(toolbar, event.rawX.toInt(), event.rawY.toInt()) else null
-                ribbonMouseTarget = target?.takeIf { it.isClickable }
-                if (ribbonMouseTarget != null) {
+                // Native mouse DOWN can be consumed by either HorizontalScrollView.
+                // Hover targets are shell-owned controls only; hosted app surfaces are
+                // deliberately not registered, so their native input remains untouched.
+                val target = if (::root.isInitialized)
+                    findBeastHoverTarget(root, event.rawX.toInt(), event.rawY.toInt()) else null
+                shellMouseTarget = target?.takeIf { it.isClickable }
+                shellMouseControlKey = shellMouseTarget?.let { shellControlKeys[it] }
+                if (shellMouseTarget != null) {
                     onUserInteraction()
-                    ribbonMouseDownX = event.rawX
-                    ribbonMouseDownY = event.rawY
-                    ribbonMouseCancelled = false
-                    ribbonMouseTarget?.isPressed = true
+                    shellMouseDownX = event.rawX
+                    shellMouseDownY = event.rawY
+                    shellMouseCancelled = false
+                    shellMouseTarget?.isPressed = true
                     return true
                 }
             }
-            ribbonMouseTarget?.let { target ->
+            shellMouseTarget?.let { target ->
                 val slop = android.view.ViewConfiguration.get(this).scaledTouchSlop
-                if (kotlin.math.abs(event.rawX - ribbonMouseDownX) > slop ||
-                    kotlin.math.abs(event.rawY - ribbonMouseDownY) > slop) ribbonMouseCancelled = true
+                if (kotlin.math.abs(event.rawX - shellMouseDownX) > slop ||
+                    kotlin.math.abs(event.rawY - shellMouseDownY) > slop) shellMouseCancelled = true
                 if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-                    ribbonMouseTarget = null
+                    shellMouseTarget = null
                     target.isPressed = false
                     val bounds = Rect()
-                    if (event.actionMasked == MotionEvent.ACTION_UP && !ribbonMouseCancelled &&
-                        target.isShown && target.isEnabled && target.getGlobalVisibleRect(bounds) &&
-                        bounds.contains(event.rawX.toInt(), event.rawY.toInt())) target.performClick()
+                    val current = if (::root.isInitialized)
+                        findBeastHoverTarget(root, event.rawX.toInt(), event.rawY.toInt()) else null
+                    val sameControl = current === target || (shellMouseControlKey != null &&
+                        current?.let { shellControlKeys[it] } == shellMouseControlKey)
+                    shellMouseControlKey = null
+                    if (event.actionMasked == MotionEvent.ACTION_UP && !shellMouseCancelled &&
+                        sameControl && current != null && current.isShown && current.isEnabled &&
+                        current.getGlobalVisibleRect(bounds) && bounds.contains(event.rawX.toInt(), event.rawY.toInt())) {
+                        current.performClick()
+                    }
                 }
                 return true
             }
@@ -1018,9 +1085,16 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         }.forEach { task ->
             val card = cards[task.id] ?: return@forEach
             val width = if (task.mode == PresentationMode.PHONE) phoneWidth else tabletWidth
-            card.layoutParams = LinearLayout.LayoutParams(width, ViewGroup.LayoutParams.MATCH_PARENT).apply {
-                marginEnd = dp(12)
-            }
+            val margin = dp(12)
+            val current = card.layoutParams as? LinearLayout.LayoutParams
+            if (current?.width == width &&
+                current.height == ViewGroup.LayoutParams.MATCH_PARENT &&
+                current.marginEnd == margin
+            ) return@forEach
+            card.layoutParams = LinearLayout.LayoutParams(
+                width,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ).apply { marginEnd = margin }
         }
     }
 
@@ -1073,7 +1147,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
                 })
                 addView(title, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, uiDp(18)))
                 alpha = if (task.minimized || !task.supportsMultiWindow) .52f else 1f
-                setBeastClick { focusTask(task) }
+                setBeastClick("task:${task.id}") { focusTask(task) }
                 installBeastHover(listOf(number to { numberColor }, title to { labelColor }))
                 taskTabs.addView(this, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, uiDp(36)).apply {
                     marginEnd = uiDp(2)
@@ -1390,7 +1464,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             if (::cursorOverlay.isInitialized) cursorOverlay.visibility = View.GONE
             return
         }
-        if (::cursorOverlay.isInitialized && cursorOverlay.parent === aspectLayer) {
+        if (::cursorOverlay.isInitialized && cursorOverlay.parent === aspectLayer &&
+            aspectLayer.indexOfChild(cursorOverlay) != aspectLayer.childCount - 1) {
             cursorOverlay.bringToFront()
         }
     }
@@ -1810,7 +1885,10 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun uiDp(value: Int) = (dp(value) * uiElementScale).toInt()
 
-    private fun View.setBeastClick(action: () -> Unit) {
+    private fun View.setBeastClick(action: () -> Unit) = setBeastClick((this as? TextView)?.text?.toString() ?: "view:${System.identityHashCode(this)}", action)
+
+    private fun View.setBeastClick(key: String, action: () -> Unit) {
+        shellControlKeys[this] = key
         setOnClickListener { controlDebouncer.submit(action) }
         (this as? TextView)?.installBeastHover()
     }
@@ -1823,11 +1901,16 @@ internal class BeastCursorOverlay(
     private val displayCoordinates: Boolean = false,
     private val displayIdProvider: () -> Int = { Display.DEFAULT_DISPLAY },
 ) : View(context) {
-    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(244, 243, 238)
+        style = Paint.Style.FILL
+    }
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(20, 24, 24)
+        color = Color.rgb(22, 25, 26)
         style = Paint.Style.STROKE
-        strokeWidth = context.resources.displayMetrics.density * 1.5f
+        strokeWidth = context.resources.displayMetrics.density * 1.35f
+        strokeJoin = Paint.Join.ROUND
+        strokeCap = Paint.Cap.ROUND
     }
     private val pointer = Path()
 
@@ -1853,15 +1936,18 @@ internal class BeastCursorOverlay(
             x = state.xFraction * width
             y = state.yFraction * height
         }
-        val size = resources.displayMetrics.density * 18f
+        // Neutral, compact workstation pointer. Keep the hotspot at the exact
+        // tip and draw from normalized geometry so the silhouette stays clean
+        // at every display density without a bitmap halo.
+        val size = resources.displayMetrics.density * 16f
         pointer.reset()
         pointer.moveTo(x, y)
-        pointer.lineTo(x, y + size)
-        pointer.lineTo(x + size * .32f, y + size * .72f)
-        pointer.lineTo(x + size * .58f, y + size * 1.08f)
-        pointer.lineTo(x + size * .82f, y + size * .9f)
-        pointer.lineTo(x + size * .52f, y + size * .54f)
-        pointer.lineTo(x + size, y + size * .52f)
+        pointer.lineTo(x + size * .04f, y + size * .94f)
+        pointer.lineTo(x + size * .30f, y + size * .69f)
+        pointer.lineTo(x + size * .49f, y + size * 1.06f)
+        pointer.lineTo(x + size * .66f, y + size * .97f)
+        pointer.lineTo(x + size * .46f, y + size * .61f)
+        pointer.lineTo(x + size * .82f, y + size * .61f)
         pointer.close()
         canvas.drawPath(pointer, fill)
         canvas.drawPath(pointer, stroke)
@@ -1886,12 +1972,6 @@ internal class BeastTaskCard(
 
     private val column = LinearLayout(context)
     private val chrome = FrameLayout(context)
-    private val chromeScroll = object : HorizontalScrollView(context) {
-        override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-            if (event.actionMasked == MotionEvent.ACTION_DOWN) parent?.requestDisallowInterceptTouchEvent(true)
-            return super.dispatchTouchEvent(event)
-        }
-    }.apply { isFillViewport = true }
     private val appLabel = TextView(context)
     private val modeButton = TextView(context)
     private val leftControls = LinearLayout(context)
@@ -1903,20 +1983,24 @@ internal class BeastTaskCard(
     private val fullscreenExit = TextView(context)
     private val controls = mutableListOf<TextView>()
     private val controlBaseWidths = mutableMapOf<TextView, Int>()
+    private var decoratorScale = 1f
     private var boundTask: BeastTask? = null
     private var focused = false
     private var fullscreen = false
+    private var appliedBorderSignature: Triple<Boolean, Boolean, Int>? = null
     private var backQueryGeneration = 0
     internal fun setPhoneDisplay(value: Boolean) {
         surface.nativePhoneInput = value
     }
     var uiScale = 1f
         set(value) {
+            if (kotlin.math.abs(field - value) < .001f) return
             field = value
             applyUiScale()
         }
     var fontScale = 1f
         set(value) {
+            if (kotlin.math.abs(field - value) < .001f) return
             field = value
             applyFontScale()
         }
@@ -1929,12 +2013,15 @@ internal class BeastTaskCard(
         }
     var phoneAppConfiguration = InputSettings.PhoneAppConfiguration(240, 1f, 1, 1f, 1.25f)
         set(value) {
+            if (field == value) return
             field = value
             updateAppDensityForRenderedHeight()
         }
     var renderedVerticalScale = 1f
         set(value) {
-            field = value.coerceIn(.1f, 1f)
+            val next = value.coerceIn(.1f, 1f)
+            if (kotlin.math.abs(field - next) < .001f) return
+            field = next
             updateAppDensityForRenderedHeight()
         }
 
@@ -2043,12 +2130,16 @@ internal class BeastTaskCard(
             ViewGroup.LayoutParams.MATCH_PARENT,
             Gravity.END or Gravity.CENTER_VERTICAL,
         ))
-        chrome.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+        chrome.addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
+            val nextScale = decoratorGeometryScale(uiScale, right - left, resources.displayMetrics.density)
+            if (kotlin.math.abs(nextScale - decoratorScale) >= .005f) {
+                decoratorScale = nextScale
+                applyDecoratorGeometry()
+            }
             updateNavigationVisibility()
         }
-        chrome.minimumWidth = decoratorDp(LEFT_CONTROLS_WIDTH_DP + CENTER_NAVIGATION_WIDTH_DP + RIGHT_CONTROLS_WIDTH_DP + 12)
-        chromeScroll.addView(chrome, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        column.addView(chromeScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)))
+        chrome.minimumWidth = 0
+        column.addView(chrome, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)))
         column.addView(surface, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         addView(column, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         fullscreenExit.text = "[T]"
@@ -2107,6 +2198,9 @@ internal class BeastTaskCard(
     }
 
     private fun applyWindowBorder() {
+        val signature = Triple(fullscreen, focused, InputSettings.accentColor)
+        if (appliedBorderSignature == signature) return
+        appliedBorderSignature = signature
         val border = if (fullscreen) 0 else dp(OMARCHY_WINDOW_BORDER_DP).coerceAtLeast(1)
         setPadding(border, border, border, border)
         background = if (fullscreen) {
@@ -2141,6 +2235,7 @@ internal class BeastTaskCard(
     fun captureBitmap() = surface.captureBitmap()
     fun fullscreenExitControl(): TextView = fullscreenExit
     fun restoreFocus() = surface.requestFocus()
+    fun refreshAfterHostResume() = surface.refreshAfterHostResume()
     fun retryImeRouting() = surface.retryImeRouting()
     fun routeScrollAt(globalX: Int, globalY: Int, amount: Float) =
         surface.routeScrollAt(globalX, globalY, amount)
@@ -2200,12 +2295,18 @@ internal class BeastTaskCard(
 
     private fun applyUiScale() {
         if (!::backButton.isInitialized || !::captureAppButton.isInitialized) return
+        decoratorScale = decoratorGeometryScale(uiScale, chrome.width, resources.displayMetrics.density)
+        applyDecoratorGeometry()
+        applyFontScale()
+        requestLayout()
+    }
+
+    private fun applyDecoratorGeometry() {
         chrome.setPadding(decoratorDp(8), 0, decoratorDp(4), 0)
         applyWindowBorder()
-        chrome.minimumWidth = decoratorDp(LEFT_CONTROLS_WIDTH_DP + CENTER_NAVIGATION_WIDTH_DP + RIGHT_CONTROLS_WIDTH_DP + 12)
-        chromeScroll.layoutParams?.let {
+        chrome.layoutParams?.let {
             it.height = decoratorDp(30)
-            chromeScroll.layoutParams = it
+            chrome.layoutParams = it
         }
         controls.forEach { control ->
             control.layoutParams?.let {
@@ -2229,7 +2330,6 @@ internal class BeastTaskCard(
             it.height = decoratorDp(36)
             fullscreenExit.layoutParams = it
         }
-        requestLayout()
     }
 
     /** Preserve the centre arrows on narrow cards by collapsing only the title. */
@@ -2237,7 +2337,8 @@ internal class BeastTaskCard(
         if (chrome.width <= 0) return
         val titleSlotWidth = chrome.width - chrome.paddingLeft - chrome.paddingRight -
             decoratorDp(RIGHT_CONTROLS_WIDTH_DP * 2)
-        val collapseTitle = titleSlotWidth < decoratorDp(MIN_TITLE_SLOT_DP)
+        val labelSlotWidth = titleSlotWidth - decoratorDp(CENTER_NAVIGATION_WIDTH_DP)
+        val collapseTitle = labelSlotWidth < decoratorDp(MIN_TITLE_SLOT_DP)
         val currentlyCollapsed = appLabel.visibility == View.GONE
         if (collapseTitle == currentlyCollapsed && !force) return
 
@@ -2245,14 +2346,9 @@ internal class BeastTaskCard(
         val params = noteNavigation.layoutParams as? FrameLayout.LayoutParams ?: return
         if (collapseTitle) {
             params.width = ViewGroup.LayoutParams.WRAP_CONTENT
-            val contentWidth = chrome.width - chrome.paddingLeft - chrome.paddingRight
-            val leftInset = decoratorDp(LEFT_CONTROLS_WIDTH_DP)
-            val rightInset = decoratorDp(RIGHT_CONTROLS_WIDTH_DP)
-            val navigationWidth = decoratorDp(CENTER_NAVIGATION_WIDTH_DP)
-            val freeCenterWidth = (contentWidth - leftInset - rightInset).coerceAtLeast(0)
-            params.marginStart = leftInset + ((freeCenterWidth - navigationWidth).coerceAtLeast(0) / 2)
+            params.marginStart = 0
             params.marginEnd = 0
-            params.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            params.gravity = Gravity.CENTER
             noteNavigation.gravity = Gravity.CENTER
         } else {
             params.width = ViewGroup.LayoutParams.MATCH_PARENT
@@ -2277,8 +2373,8 @@ internal class BeastTaskCard(
         const val LEFT_CONTROLS_WIDTH_DP = 68
         const val RIGHT_CONTROLS_WIDTH_DP = 126
         const val CENTER_NAVIGATION_WIDTH_DP = 60
-        const val MIN_TITLE_SLOT_DP = 72
-        const val DECORATOR_GEOMETRY_SCALE_MAX = 1.15f
+        // Short app names remain readable here; longer titles ellipsize in the TextView.
+        const val MIN_TITLE_SLOT_DP = 64
         const val DECORATOR_TEXT_SCALE_MAX = 1.50f
         const val MIN_HOSTED_APP_DPI = 72
         const val MAX_HOSTED_APP_DPI = HostedAppDensity.MAX_RENDER_DPI
@@ -2286,7 +2382,7 @@ internal class BeastTaskCard(
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun decoratorDp(value: Int): Int =
-        (dp(value) * uiScale.coerceIn(.85f, DECORATOR_GEOMETRY_SCALE_MAX)).roundToInt()
+        (dp(value) * decoratorScale).roundToInt()
 
     private fun decoratorTextScale(): Float = fontScale.coerceIn(.85f, DECORATOR_TEXT_SCALE_MAX)
 

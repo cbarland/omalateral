@@ -2,6 +2,8 @@ package com.lateral.privileged
 
 import android.content.Context
 import android.os.Build
+import android.os.Binder
+import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -13,6 +15,7 @@ import io.github.muntashirakon.adb.AdbPairingRequiredException
 import io.github.muntashirakon.adb.AdbStream
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -193,8 +196,17 @@ object PrivilegedService {
     /** Call once, from the Application. Computes the initial state from persisted identity. */
     fun init(context: Context) {
         appContext = context.applicationContext
-        state = computeInitialState(context)
-        notifyListeners()
+        // USB provider admission and READY publication are serialized on this worker too.
+        // Queue initialization behind any admission already accepted before Application.onCreate.
+        worker.execute {
+            val usbInProgress = usbAttempt?.valid() == true
+            val usbReady = usbLease?.let {
+                it.binder == service?.asBinder() && !it.attempt.cancelled &&
+                    it.attempt.ready.getNow(false) == true && it.binder.pingBinder()
+            } == true
+            if (!isBridgeReady() && !usbInProgress && !usbReady) state = computeInitialState(context.applicationContext)
+            notifyListeners()
+        }
     }
 
     fun addListener(listener: () -> Unit) = listeners.add(listener)
@@ -273,6 +285,7 @@ object PrivilegedService {
      */
     fun ensureRunning() {
         worker.execute {
+            if (usbAttempt?.valid() == true) return@execute
             val ctx = appContext ?: return@execute
             if (state == State.UNSUPPORTED) return@execute
             if (state == State.READY && service != null) return@execute
@@ -395,27 +408,240 @@ object PrivilegedService {
         }
     }
 
-    /**
-     * Called by [BinderReceiverProvider] when [PrivilegedServer] hands its Binder back. The
-     * provider gates this on the calling uid (shell or self), so this is reachable only
-     * from the server we started.
-     */
-    fun onPrivilegedBinder(binder: IBinder) {
+    // Owned by the serial service worker; attempt cancellation is immediately visible.
+    private var usbAttempt: UsbBootstrapAttempt? = null
+    @Volatile private var visibleUsbAttempt: UsbBootstrapAttempt? = null
+    private var usbCandidate: IBinder? = null
+    private var usbShellAccepted = false
+    private var serviceGeneration = 0L
+    private var serviceDeath: IBinder.DeathRecipient? = null
+    private class UsbLease(val attempt: UsbBootstrapAttempt, val binder: IBinder,
+        val generation: Long, val owner: IBinder = Binder())
+    @Volatile private var usbLease: UsbLease? = null
+    enum class BridgeTransport { NONE, USB, WIRELESS }
+    @Volatile private var acceptedTransport: BridgeTransport = BridgeTransport.NONE
+    fun bridgeTransport(): BridgeTransport {
+        if (!isBridgeReady()) return BridgeTransport.NONE
+        if (acceptedTransport != BridgeTransport.USB) return acceptedTransport
+        val lease = usbLease ?: return BridgeTransport.NONE
+        return if (lease.binder == service?.asBinder() && !lease.attempt.cancelled &&
+            lease.attempt.ready.getNow(false) == true && lease.binder.pingBinder())
+            BridgeTransport.USB else BridgeTransport.NONE
+    }
+    private var usbDeadline: Runnable? = null
+
+    internal fun maySweepOrphanHelpers(): Boolean = visibleUsbAttempt?.valid() != true && usbLease?.let {
+        it.binder == service?.asBinder() && !it.attempt.cancelled &&
+            it.attempt.ready.getNow(false) == true && it.binder.pingBinder()
+    } != true
+
+    internal fun admitAdbOnly(token: String, helper: IBinder): UsbBootstrapAttempt {
+        val attempt = UsbBootstrapAttempt(token, System.nanoTime() + 15_000_000_000L)
+        val death = IBinder.DeathRecipient { cancelUsb(attempt) }
+        try {
+            helper.linkToDeath(death, 0)
+            attempt.onEnded { runCatching { helper.unlinkToDeath(death, 0) } }
+            check(helper.pingBinder())
+            beginUsb(attempt, adbHelper = helper)
+        } catch (_: Exception) {
+            cancelUsb(attempt)
+        }
+        return attempt
+    }
+
+    internal fun beginUsb(attempt: UsbBootstrapAttempt, adbHelper: IBinder? = null) {
+        worker.execute {
+            // Stage one correlated USB candidate while retaining the current owner.
+            if (!attempt.valid()) {
+                attempt.refusalReason = "USB admission expired"
+                attempt.cancel()
+                return@execute
+            }
+            if (usbLease?.let { it.binder.pingBinder() && !it.attempt.cancelled } == true) {
+                attempt.refusalReason = "An active USB helper already owns the service"
+                attempt.cancel()
+                return@execute
+            }
+            if (usbAttempt?.valid() == true) {
+                attempt.refusalReason = "Another USB admission is already in progress"
+                attempt.cancel()
+                return@execute
+            }
+            usbAttempt?.cancel()
+            usbCandidate?.let { rejectOffer(it) }
+            usbAttempt = attempt
+            visibleUsbAttempt = attempt
+            usbShellAccepted = adbHelper != null
+            usbCandidate = adbHelper
+            attempt.admitted.complete(true)
+            val delay = ((attempt.deadlineNanos - System.nanoTime()) / 1_000_000).coerceAtLeast(0)
+            usbDeadline?.let { mainHandler.removeCallbacks(it) }
+            usbDeadline = Runnable {
+                worker.execute { if (usbAttempt === attempt) cancelUsb(attempt) }
+            }.also { mainHandler.postDelayed(it, delay) }
+        }
+    }
+
+    internal fun cancelUsb(attempt: UsbBootstrapAttempt) {
+        attempt.cancel()
+        worker.execute {
+            val lease = usbLease
+            if (lease?.attempt === attempt) {
+                usbLease = null
+                if (BinderOfferPolicy.currentDeath(service?.asBinder(), lease.binder,
+                        serviceGeneration, lease.generation)) {
+                    serviceDeath?.let { runCatching { lease.binder.unlinkToDeath(it, 0) } }
+                    service = null
+                    acceptedTransport = BridgeTransport.NONE
+                    serviceDeath = null
+                    serviceGeneration++
+                    runCatching { IPrivilegedService.Stub.asInterface(lease.binder).exit() }
+                    setImeRoutingState(ImeRoutingState.UNAVAILABLE)
+                    setState(State.NEEDS_WIRELESS_DEBUGGING)
+                    ensureRunning()
+                }
+            }
+            if (usbAttempt !== attempt) return@execute
+            usbDeadline?.let { mainHandler.removeCallbacks(it) }
+            usbDeadline = null
+            usbAttempt = null
+            visibleUsbAttempt = null
+            usbCandidate?.let { rejectOffer(it) }
+            usbCandidate = null
+            usbShellAccepted = false
+            if (service?.asBinder()?.pingBinder() != true) {
+                setState(State.NEEDS_WIRELESS_DEBUGGING)
+                ensureRunning()
+            }
+        }
+    }
+
+    internal fun usbShellAccepted(attempt: UsbBootstrapAttempt) {
+        worker.execute {
+            if (usbAttempt !== attempt || !attempt.valid()) return@execute
+            usbShellAccepted = true
+            usbCandidate?.let { onBinderOnWorker(it, attempt.token) }
+        }
+    }
+
+    private fun rejectOffer(binder: IBinder) {
+        // A repeated offer of our accepted Binder must never terminate that service.
+        if (service?.asBinder() == binder) return
+        runCatching { IPrivilegedService.Stub.asInterface(binder).exit() }
+    }
+
+    fun onPrivilegedBinder(binder: IBinder, usbToken: String? = null) {
+        worker.execute { onBinderOnWorker(binder, usbToken) }
+    }
+
+    /** Never waits on the serial worker; the provider bounds its own Binder-thread wait. */
+    internal fun offerUsbBinder(binder: IBinder, token: String): CompletableFuture<Bundle?> {
+        val reply = CompletableFuture<Bundle?>()
+        worker.execute {
+            if (reply.isCancelled) { rejectOffer(binder); return@execute }
+            val attempt = usbAttempt?.takeIf { it.matches(token) }
+            fun acknowledge() {
+                val lease = usbLease
+                val owned = lease != null && lease.attempt.token == token &&
+                    !lease.attempt.cancelled && lease.binder == binder &&
+                    BinderOfferPolicy.currentDeath(service?.asBinder(), binder,
+                        serviceGeneration, lease.generation) && binder.pingBinder()
+                val bundle = if (owned) Bundle().apply {
+                    putBoolean(BinderReceiverProvider.EXTRA_ACCEPTED, true)
+                    putBinder(BinderReceiverProvider.EXTRA_OWNER, lease!!.owner)
+                } else null
+                if (!reply.complete(bundle) && owned) cancelUsb(lease!!.attempt)
+            }
+            onBinderOnWorker(binder, token)
+            if (usbCandidate == binder && usbAttempt === attempt && attempt != null) {
+                attempt.ready.whenComplete { _, _ -> worker.execute { acknowledge() } }
+            } else acknowledge()
+            reply.whenComplete { _, _ ->
+                if (reply.isCancelled) worker.execute {
+                    val lease = usbLease
+                    if (lease?.binder == binder && lease.attempt.token == token) {
+                        cancelUsb(lease.attempt)
+                    } else if (usbCandidate == binder && usbAttempt === attempt && attempt != null) {
+                        cancelUsb(attempt)
+                    }
+                }
+            }
+        }
+        return reply
+    }
+
+    private fun onBinderOnWorker(binder: IBinder, usbToken: String?) {
+        val attempt = usbAttempt
+        when (BinderOfferPolicy.decide(service?.asBinder(), service?.asBinder()?.pingBinder() == true,
+            usbCandidate, binder, usbToken, attempt, usbShellAccepted)) {
+            BinderOfferPolicy.Decision.IGNORE -> return
+            BinderOfferPolicy.Decision.REJECT -> { rejectOffer(binder); return }
+            BinderOfferPolicy.Decision.WAIT_FOR_SHELL -> { usbCandidate = binder; return }
+            BinderOfferPolicy.Decision.ACCEPT -> Unit
+        }
         if (!binder.pingBinder()) {
             Log.w(TAG, "onPrivilegedBinder: ping failed")
+            if (usbToken != null && attempt != null) cancelUsb(attempt)
             return
         }
-        // Displace any previously-bound server. Without this, the spawn-race window
-        // can hand us a second (or third) binder for a separate PrivilegedServer
-        // process — each one running its own /dev/input/event* HotkeyMonitor and
-        // its own native input injector. The orphans never exit on their own.
-        val previous = service
-        if (previous != null) {
-            Log.w(TAG, "displacing previously-bound privileged service — calling exit()")
-            runCatching { previous.setHotkeyListener(null) }
-            runCatching { previous.exit() }
+        val generation = serviceGeneration + 1
+        val death = IBinder.DeathRecipient {
+            worker.execute {
+                if (BinderOfferPolicy.currentDeath(service?.asBinder(), binder, serviceGeneration, generation)) {
+                    usbLease?.takeIf { it.binder == binder && it.generation == generation }?.let {
+                        it.attempt.cancel()
+                        usbLease = null
+                    }
+                    service = null
+                    acceptedTransport = BridgeTransport.NONE
+                    serviceDeath = null
+                    serviceGeneration++
+                    runCatching { adbStream?.close() }
+                    adbStream = null
+                    setImeRoutingState(ImeRoutingState.UNAVAILABLE)
+                    setState(State.NEEDS_WIRELESS_DEBUGGING)
+                    ensureRunning()
+                }
+            }
         }
-        service = IPrivilegedService.Stub.asInterface(binder)
+        try {
+            binder.linkToDeath(death, 0)
+            check(binder.pingBinder())
+            if (usbToken != null) check(attempt?.matches(usbToken) == true)
+        } catch (failure: Exception) {
+            runCatching { binder.unlinkToDeath(death, 0) }
+            rejectOffer(binder)
+            if (usbToken != null && attempt != null) cancelUsb(attempt)
+            return
+        }
+        // The admission policy preserves every healthy accepted service.
+        val previous = service
+        val previousDeath = serviceDeath
+        val publish: () -> Unit = {
+            service = IPrivilegedService.Stub.asInterface(binder)
+            acceptedTransport = if (usbToken != null) BridgeTransport.USB else BridgeTransport.WIRELESS
+            serviceGeneration = generation
+            serviceDeath = death
+            if (usbToken != null) {
+                usbLease = UsbLease(checkNotNull(attempt), binder, generation)
+                usbDeadline?.let { mainHandler.removeCallbacks(it) }
+                usbDeadline = null
+                usbAttempt = null
+                usbCandidate = null
+                usbShellAccepted = false
+            } else usbLease = null
+        }
+        if (usbToken != null) {
+            if (attempt?.commit(publish) != true) {
+                runCatching { binder.unlinkToDeath(death, 0) }
+                rejectOffer(binder)
+                if (attempt != null) cancelUsb(attempt)
+                return
+            }
+        } else publish()
+        if (previous != null && previousDeath != null) {
+            runCatching { previous.asBinder().unlinkToDeath(previousDeath, 0) }
+        }
         runCatching { service?.setPhoneNavigationObserverReady(navigationObserverReady) }
         // Clear a preferred external route written by older LATERAL_ builds. The phone's
         // system audio policy owns the active route (including the user's "This Phone"
@@ -429,7 +655,22 @@ object PrivilegedService {
         // footprint, no contention against the glasses' USB IMU endpoint on OEMs
         // (Samsung) where BT input attach disturbs USB hosts.
         if (hotkeyMonitoringRequested) installHotkeyListener()
-        setState(State.READY)
+        if (!binder.pingBinder()) {
+            attempt?.ready?.complete(false)
+            death.binderDied()
+            return
+        }
+        if (usbToken != null && attempt != null) {
+            if (!attempt.commit {
+                setState(State.READY)
+                attempt.ready.complete(true)
+            }) cancelUsb(attempt)
+            else if (previous != null && previous.asBinder() != binder) {
+                // The candidate is published and READY before retiring our previous owner.
+                runCatching { previous.exit() }
+            }
+        } else setState(State.READY)
+        if (previous != null && previous.asBinder() != binder) notifyListeners()
     }
 
     /**
@@ -492,6 +733,18 @@ object PrivilegedService {
      */
     @Volatile
     private var hotkeyMonitoringRequested: Boolean = false
+
+    /**
+     * Push the current rebindable-shortcut table to the helper.
+     *
+     * The global-shortcut feature is disabled for this build: the helper's HotkeyMonitor
+     * still matches fixed Linux evdev EV_KEY codes and the Android-keycode→EV_KEY
+     * translation was never implemented, so this is a no-op. [KeyboardShortcuts] keeps
+     * persisting user bindings locally so they survive a re-enable.
+     */
+    fun syncHotkeyBindings(context: Context) {
+        // No-op — rebindable global shortcuts are disabled in this build.
+    }
 
     /**
      * Toggle the shell-uid HotkeyMonitor based on whether a physical keyboard is

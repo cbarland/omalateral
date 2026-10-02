@@ -2,7 +2,7 @@ package com.lateral.privileged
 
 /**
  * Hotkey codes the shell-uid [PrivilegedServer] forwards to the app-side dispatcher when a
- * global Ctrl+Alt+X combo fires. Shared by both sides of the AIDL boundary
+ * global Beast shortcut fires. Shared by both sides of the AIDL boundary
  * ([IPrivilegedHotkeyListener.onHotkey]).
  *
  * The combinations mirror the Windows companion app at
@@ -14,6 +14,8 @@ package com.lateral.privileged
  *  - Ctrl+Alt+X         → [HK_TOGGLE_VIEW_MODE]   → `WorkspaceController.setViewMode(opposite)`
  *  - Ctrl+Alt+R         → [HK_SDK_RECENTER]       → `NativeGlasses.resetOriginCarina()`
  *  - Ctrl+Alt+C         → [HK_ANCHOR_POSE]        → `WorkspaceController.alignVerticalToHead()`
+ *  - Ctrl+Left          → [HK_FOCUS_LEFT]         → focus/reveal the previous Beast window
+ *  - Ctrl+Right         → [HK_FOCUS_RIGHT]        → focus/reveal the next Beast window
  *
  * Ctrl+Alt+Wheel is handled in `MainActivity.dispatchGenericMotionEvent` directly — the
  * keyboard modifier state rides on the MotionEvent, so the activity sees it without needing
@@ -43,4 +45,17 @@ object PrivilegedHotkeys {
     /** Cycle FREE-mode layout (SINGLE → VHV → … ). No-op in PINNED. Android-only —
      *  the Windows companion has no equivalent "scene layout" concept. */
     const val HK_CYCLE_LAYOUT = 9
+    const val HK_FOCUS_LEFT = 10
+    const val HK_FOCUS_RIGHT = 11
+    const val HK_APPS = 12
+    const val HK_FULLSCREEN = 13
+    const val HK_MINIMIZE = 14
+    const val HK_FRAME = 15
+    const val HK_SHOW_ALL = 16
+    const val HK_MINIMIZE_ALL = 17
+    const val HK_CLOSE = 18
+    const val HK_CLOSE_ALL = 19
+    const val HK_CAPTURE = 20
+    const val HK_DISPLAY_SETTINGS = 21
+    const val HK_GENERAL_SETTINGS = 22
 }

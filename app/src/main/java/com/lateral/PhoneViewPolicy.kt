@@ -17,7 +17,8 @@ internal class PhoneViewPolicy {
     private var offered = false
     var canEnter = true
         private set
-    private var keyboardPresent = false
+    var keyboardPresent = false
+        private set
 
     fun update(keyboard: Boolean, externalDisplay: Boolean) {
         val keyboardDisconnected = keyboardPresent && !keyboard
@@ -34,6 +35,11 @@ internal class PhoneViewPolicy {
         if (!enabled || !eligible || active || offered) return false
         offered = true
         return true
+    }
+
+    /** A newly foregrounded PhoneUI gets one fresh eligibility offer. */
+    fun phoneUiFocused() {
+        if (!active) offered = false
     }
 
     fun offerPresentationFailed() { offered = false }

@@ -69,3 +69,20 @@ Before expanding behavior, verify on the target Nubia NX789J firmware that:
    display while keyboard focus remains predictable.
 
 Those checks define the boundary between UI work and device-specific task-hosting work.
+
+## Required emulator regression gate
+
+Every LATERAL version must pass `scripts/validate-beast-usb-ui.ps1 -Serial emulator-5554`
+on the supported emulator API level before phone handoff. The runner creates a native
+1920x1080 secondary display, acknowledges the emulator's fullscreen onboarding, and
+disables emulator animations. It uses the production detached USB bootstrap helper;
+wireless ADB is unnecessary. Emulator transport does not qualify physical USB or PD.
+
+The UI gate hosts two fixture apps and repeats five minimize-all/restore cycles.
+After each of the ten restores it checks the selected task, taskbar control routing,
+`+APPS` opening and closing, PhoneUI's settings responding to a real display-0 tap,
+and display-0 dialog focus. Explicit Home must remain selected after the focus lease.
+The detached helper EOF/owner-cancellation test is also mandatory. Test fixture tasks
+and helpers are cleaned up. The script rejects missing or failed instrumentation
+results even when ADB returns exit code zero. Record a pass only after both tests pass.
+Physical Nubia and glasses checks remain required for device-specific behavior.

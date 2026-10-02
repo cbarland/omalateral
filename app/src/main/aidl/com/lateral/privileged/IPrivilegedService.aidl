@@ -189,4 +189,6 @@ interface IPrivilegedService {
     /** Re-arm transaction recovery only after a fresh foreground workspace interaction. */
     void allowPhoneFocusRecovery(int phoneTaskId) = 48;
     void setPhoneNavigationObserverReady(boolean ready) = 49;
+    /** Replace the global shortcut table. Entries are actionCode|modifierMask|AndroidKeyCode. */
+    void setHotkeyBindings(in String[] bindings) = 50;
 }

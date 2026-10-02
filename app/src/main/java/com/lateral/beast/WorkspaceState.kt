@@ -292,6 +292,21 @@ object WorkspaceState {
         onImmediateSyncRequested?.invoke()
     }
 
+    /** Focus the adjacent visible card and ask BeastUI to reveal it in the horizontal strip. */
+    fun focusRelative(delta: Int): Boolean {
+        if (delta == 0) return false
+        val visibleIds = mutableTasks.asSequence()
+            .filter {
+                it.placement == TaskPlacement.BEAST_VISIBLE ||
+                    it.placement == TaskPlacement.PENDING_BEAST
+            }
+            .map(BeastTask::id)
+            .toList()
+        val targetId = relativeFocusTarget(visibleIds, focusedTaskId, delta) ?: return false
+        focus(targetId, reveal = true)
+        return focusedTaskId == targetId
+    }
+
     fun setMode(id: Long, mode: PresentationMode) {
         val task = mutableTasks.firstOrNull { it.id == id } ?: return
         val nextMode = when {
@@ -442,4 +457,16 @@ object WorkspaceState {
     private const val MISSING_GRACE_POLLS = 3
     private const val BEAST_MOVE_GRACE_MS = 2_500L
     private const val DISPLAY_MODE_HANDOFF_TIMEOUT_MS = 15_000L
+}
+
+/** Pure navigation policy: move one card in the requested direction and stop at the edge. */
+internal fun relativeFocusTarget(ids: List<Long>, focusedId: Long?, delta: Int): Long? {
+    if (ids.isEmpty() || delta == 0) return null
+    val current = ids.indexOf(focusedId)
+    val target = if (current < 0) {
+        if (delta < 0) ids.lastIndex else 0
+    } else {
+        (current + if (delta < 0) -1 else 1).coerceIn(0, ids.lastIndex)
+    }
+    return ids[target].takeIf { it != focusedId }
 }

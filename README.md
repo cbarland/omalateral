@@ -58,6 +58,21 @@ glasses or Beast touchpad.
 
 Behavior therefore depends on the NX789J firmware, Android build, and the connected Beast display. Re-test the privileged path after phone or system updates.
 
+### Stable debug validation
+
+Every new LATERAL version must pass the [USB bootstrap focus/chrome emulator gate](docs/BEAST_UI.md#required-emulator-regression-gate)
+before phone handoff: `scripts/validate-beast-usb-ui.ps1 -Serial emulator-5554`.
+It checks PhoneUI focus and touch after ten app restores, taskbar and `+APPS`
+interaction, explicit Home, and detached-helper cleanup. Hardware validation remains separate.
+
+Run the stable debug unit tests and assemble both the app and its instrumentation APK before validating a release candidate:
+
+```powershell
+cmd.exe /d /c gradlew.bat :app:testStableDebugUnitTest :app:assembleStableDebug :app:assembleStableDebugAndroidTest --offline --console=plain
+```
+
+Run the USB helper lifecycle instrumentation on an Android 12 or newer emulator or device with `:app:connectedStableDebugAndroidTest`. The lifecycle suite starts the production `--usb-adb-bootstrap` entry point and checks that its detached owner remains alive after stdin EOF, then cleans up the owner explicitly. Hardware input and secondary-display focus behavior still require validation on the supported phone and glasses.
+
 ## Requirements
 
 - Nubia NX789J running the supported Android 15 firmware.

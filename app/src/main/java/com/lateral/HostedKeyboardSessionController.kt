@@ -54,7 +54,6 @@ class HostedKeyboardSessionController(
     fun begin(next: HostedTextInputSession.Target) {
         generation++
         target = next
-        deadline = SystemClock.uptimeMillis() + ACTIVATION_TIMEOUT_MS
         updateState(State.ACTIVATING, "Connecting keyboard…")
         val requestGeneration = generation
         PrivilegedService.beginSessionInputMethod(imeId, ownerToken) { activation ->
@@ -67,6 +66,10 @@ class HostedKeyboardSessionController(
             if (previousImeId.isNotBlank()) {
                 prefs.edit().putString(KEY_PREVIOUS_IME, previousImeId).apply()
             }
+            // IME selection may include a cold FlorisBoard process/theme startup. Give
+            // editor verification its own window instead of consuming it while the
+            // privileged helper is still enabling and selecting the IME.
+            deadline = SystemClock.uptimeMillis() + ACTIVATION_TIMEOUT_MS
             verifyTarget()
         }
     }
@@ -175,7 +178,7 @@ class HostedKeyboardSessionController(
         private const val TAG = "Lateral/HostedKeyboard"
         private const val PREFS = "hosted_keyboard_session"
         private const val KEY_PREVIOUS_IME = "previous_ime"
-        private const val ACTIVATION_TIMEOUT_MS = 2_000L
+        private const val ACTIVATION_TIMEOUT_MS = 5_000L
         // The IME service is pre-warmed, so a short retry interval makes the keyboard
         // appear on the first valid onStartInput rather than waiting an extra frame.
         private const val VERIFY_INTERVAL_MS = 40L

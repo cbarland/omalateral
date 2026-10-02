@@ -93,4 +93,14 @@ class PhoneViewPolicyTest {
         assertTrue(policy.active)
         assertFalse(policy.takeOffer())
     }
+
+    @Test fun foregroundedPhoneUiGetsFreshOfferWithoutDeviceReconnect() {
+        val policy = PhoneViewPolicy().apply { setEnabled(true) }
+        policy.update(true, false)
+        assertTrue(policy.takeOffer())
+        assertFalse(policy.takeOffer())
+        policy.phoneUiFocused()
+        assertTrue(policy.takeOffer())
+        assertFalse(policy.takeOffer())
+    }
 }

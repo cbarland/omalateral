@@ -106,6 +106,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         taskTransactionFocusLease = null
     }
     private var adbBridgeDialog: android.app.AlertDialog? = null
+    private var controllerSettingsDialog: android.app.AlertDialog? = null
     private var lastPromptedBridgeState: PrivilegedService.State? = null
     private val beastSearchListener: () -> Unit = {
         runOnUiThread {
@@ -115,7 +116,9 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     private val hostedTextInputListener: () -> Unit = {
         runOnUiThread {
             if (!::hostedKeyboardController.isInitialized) return@runOnUiThread
-            if (PhoneView.active) {
+            if (PhoneView.active && PhoneView.externalKeyboardPresent) {
+                // A connected keyboard drives the hosted app's editor directly in the
+                // PhoneView context; there is no software keyboard to fall back to.
                 hostedKeyboardController.end("PhoneView uses native input")
                 return@runOnUiThread
             }
@@ -219,8 +222,11 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             }
         }
 
+    private var accessoryController: com.lateral.usb.AccessoryController? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        accessoryController = com.lateral.usb.AccessoryController(this).also { it.start(intent) }
         livePhoneTaskId = taskId
         BeastWorkspaceController.cleanupLegacyTasks(this)
         // LATERAL is the active phone-side controller while Beast is running. Keep the
@@ -284,6 +290,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (accessoryController?.handleIntent(intent) == true) return
         window.decorView.post {
             if (intent.action == ACTION_PHONE_FOCUS_REPAIR) {
                 // Re-fronting PhoneUI is the end of a Beast task transaction. Do not
@@ -322,12 +329,15 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         WorkspaceState.removeViewportListener(viewportStateListener)
         PrivilegedService.mouseDeltaHandler = null
         PrivilegedService.mouseButtonHandler = null
+        accessoryController?.close()
+        accessoryController = null
         super.onDestroy()
     }
 
     override fun onResume() {
         super.onResume()
         activityResumed = true
+        PhoneView.onPhoneUiFocused(this)
         window.decorView.removeCallbacks(phoneDisplayRepair)
         livePhoneTaskId = taskId
         applyPhoneWindowFocusMode()
@@ -357,7 +367,11 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         cancelPhoneFocusRepair()
         if (::trackpad.isInitialized) trackpad.cancelActiveGesture()
         if (::inputController.isInitialized) inputController.cancelActiveButtons()
-        resetPhoneWindowFocusLeases()
+        if (controllerSettingsDialog?.isShowing == true) {
+            // Re-fronting our phone task may pause/resume it during the modal launch.
+            // Keep the modal lease until dismissal; it does not front a background task.
+            releaseTaskTransactionWindowFocus()
+        } else resetPhoneWindowFocusLeases()
         if (::hostedKeyboardController.isInitialized) {
             if (HostedTextInputSession.target != null) {
                 HostedTextInputSession.close()
@@ -712,7 +726,9 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     private fun privilegedStatusText(): String = when {
         PrivilegedService.state != PrivilegedService.State.READY ->
             "Input bridge: ${PrivilegedService.state}"
-        else -> "Input bridge: READY · embedded keyboard available"
+        PrivilegedService.bridgeTransport() == PrivilegedService.BridgeTransport.NONE ->
+            "Input bridge: Connecting…"
+        else -> "Input bridge: READY · ${PrivilegedService.bridgeTransport()} · embedded keyboard available"
     }
 
     private fun onHostedKeyboardStateChanged(
@@ -774,6 +790,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     private fun showControllerSettings() {
+        if (controllerSettingsDialog?.isShowing == true) return
         HostedTextInputSession.close()
         val focusLease = acquirePhoneWindowFocus()
         val entries = arrayOf(
@@ -781,6 +798,15 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             "Pair privileged input helper",
         )
         try {
+            // A touch starts while the controller is unfocusable. Clearing its flag after
+            // DOWN does not switch Android's globally focused display; this explicit user
+            // action must front the phone task before opening a keyboard/modal window.
+            startActivity(Intent(this, MainActivity::class.java).apply {
+                action = ACTION_PHONE_FOCUS_REPAIR
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }, android.app.ActivityOptions.makeBasic().apply {
+                launchDisplayId = Display.DEFAULT_DISPLAY
+            }.toBundle())
             android.app.AlertDialog.Builder(this)
                 .setTitle("LATERAL_ / config")
                 .setItems(entries) { _, which ->
@@ -793,8 +819,14 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
                 }
                 .create()
                 .also { dialog ->
-                    dialog.setOnDismissListener { focusLease.release() }
+                    controllerSettingsDialog = dialog
+                    dialog.setOnDismissListener {
+                        if (controllerSettingsDialog === dialog) controllerSettingsDialog = null
+                        focusLease.release()
+                    }
                     dialog.show()
+                    dialog.window?.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
                 }
         } catch (error: RuntimeException) {
             focusLease.release()

@@ -28,6 +28,8 @@ object PhoneView : InputManager.InputDeviceListener, DisplayManager.DisplayListe
     val enabled get() = policy.enabled
     val eligible get() = policy.eligible
     val canEnter get() = policy.canEnter
+    /** True while a real (non-virtual) external alphabetic keyboard is connected. */
+    val externalKeyboardPresent get() = policy.keyboardPresent
     var exiting = false
         private set
 
@@ -98,6 +100,13 @@ object PhoneView : InputManager.InputDeviceListener, DisplayManager.DisplayListe
 
     fun addListener(listener: () -> Unit) { listeners += listener }
     fun removeListener(listener: () -> Unit) { listeners -= listener }
+
+    /** Re-check hardware whenever PhoneUI becomes the foreground activity. */
+    fun onPhoneUiFocused(activity: MainActivity) {
+        foreground = WeakReference(activity)
+        policy.phoneUiFocused()
+        handler.post { refresh(); maybeOffer() }
+    }
 
     fun refresh() {
         val wasActive = active

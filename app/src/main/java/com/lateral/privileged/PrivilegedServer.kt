@@ -347,13 +347,16 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         run("input", "-d", displayId.toString(), "keyevent", keyCode.toString())
     }
 
-    /** Hosted windows need independent focus while the physical workspace receives input.
-     * Resolve hidden flags on the running OS, without guessing bit values on older builds.
+    /** Hosted windows need their own focus so injected clicks can activate editors.
+     *
+     * Do not combine this with VIRTUAL_DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED. Android's
+     * input-method manager only promotes the editor on the top-focused display to the
+     * active IME client. Preventing a hosted display from briefly taking top focus leaves
+     * its EditText visually focused but makes startInput fail with a display-id mismatch,
+     * so the embedded FlorisBoard session can never begin.
      */
     private fun hostedFocusFlags(): Int = runCatching {
-        val ownFocus = DisplayManager::class.java.getField("VIRTUAL_DISPLAY_FLAG_OWN_FOCUS").getInt(null)
-        val noSteal = DisplayManager::class.java.getField("VIRTUAL_DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED").getInt(null)
-        ownFocus or noSteal
+        DisplayManager::class.java.getField("VIRTUAL_DISPLAY_FLAG_OWN_FOCUS").getInt(null)
     }.getOrDefault(0)
 
     override fun nativeKey(displayId: Int, action: Int, keyCode: Int, repeatCount: Int, metaState: Int, downTime: Long, eventTime: Long) {
@@ -1220,10 +1223,12 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
 
     override fun resizeVirtualDisplay(displayId: Int, width: Int, height: Int, densityDpi: Int) {
         val display = synchronized(virtualDisplays) { virtualDisplays[displayId] } ?: return
-        runCatching {
-            display.resize(width.coerceAtLeast(1), height.coerceAtLeast(1), densityDpi)
-            Log.i(TAG, "trusted virtual display resized id=$displayId ${width}x$height")
-        }.onFailure { Log.e(TAG, "resizeVirtualDisplay failed id=$displayId", it) }
+        preserveWorkspaceFocusDuringDisplayChange {
+            runCatching {
+                display.resize(width.coerceAtLeast(1), height.coerceAtLeast(1), densityDpi)
+                Log.i(TAG, "trusted virtual display resized id=$displayId ${width}x$height")
+            }.onFailure { Log.e(TAG, "resizeVirtualDisplay failed id=$displayId", it) }
+        }
     }
 
     override fun clearDisplayOverrideSize(displayId: Int) {
@@ -1263,8 +1268,29 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
 
     override fun setVirtualDisplaySurface(displayId: Int, surface: Surface) {
         val display = synchronized(virtualDisplays) { virtualDisplays[displayId] } ?: return
-        runCatching { display.surface = surface }
-            .onFailure { Log.e(TAG, "setVirtualDisplaySurface failed id=$displayId", it) }
+        preserveWorkspaceFocusDuringDisplayChange {
+            runCatching { display.surface = surface }
+                .onFailure { Log.e(TAG, "setVirtualDisplaySurface failed id=$displayId", it) }
+        }
+    }
+
+    /** Resize/reattach can expose Home just like moving a task on some phone ROMs.
+     * Capture authority BEFORE the mutation; a repair requested afterwards cannot
+     * distinguish that transition from a workspace that was already backgrounded.
+     * This never re-arms a lease cancelled by Android Home/Recents navigation.
+     */
+    private inline fun preserveWorkspaceFocusDuringDisplayChange(change: () -> Unit) {
+        val phoneTaskId = if (navigationObserverReady) phoneUiTaskOnDefaultDisplay() else null
+        val ticket = phoneTaskId?.let {
+            focusRecovery.begin(it, topTaskIdOnDisplay(Display.DEFAULT_DISPLAY), SystemClock.uptimeMillis())
+        }
+        try {
+            change()
+        } finally {
+            if (phoneTaskId != null && ticket != null && canRecoverPhoneFocus(phoneTaskId, ticket)) {
+                schedulePhoneFocusLease(phoneTaskId)
+            }
+        }
     }
 
     override fun injectMouse(displayId: Int, x: Int, y: Int, action: Int, buttonState: Int) {
@@ -1635,6 +1661,16 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         if (!ready) focusRecovery.userNavigation()
     }
 
+    /**
+     * Rebindable-shortcut table sync — no-op for this build. The HotkeyMonitor below
+     * matches fixed Linux evdev EV_KEY codes, and the payload's Android KeyEvent
+     * keycodes have no translation table here yet; until that exists, user-rebound
+     * shortcuts do not reach the monitor and the fixed Ctrl+Alt+X set stays in force.
+     */
+    override fun setHotkeyBindings(bindings: Array<String>) {
+        // Intentionally empty — rebindable global shortcuts are disabled.
+    }
+
     override fun allowPhoneFocusRecovery(phoneTaskId: Int) {
         if (!navigationObserverReady) return
         if (observedTasks().any { it.taskId == phoneTaskId && it.displayId == Display.DEFAULT_DISPLAY &&
@@ -1684,9 +1720,14 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
     ): Boolean {
         repeat(RESTORE_VERIFY_ATTEMPTS) { attempt ->
             val observed = observedTasks()
-            val targetCorrect = observed.firstOrNull { it.taskId == taskId }?.displayId == beastDisplayId
-            val phoneCorrect = topTaskIdOnDisplay(Display.DEFAULT_DISPLAY) == phoneTaskId
-            if (targetCorrect && phoneCorrect) return true
+            val targetDisplayId = observed.firstOrNull { it.taskId == taskId }?.displayId
+            val focusedPhoneTaskId = globallyFocusedPhoneTaskId()
+            if (PhoneWorkspaceFocusPolicy.restoreVerified(
+                    targetDisplayId,
+                    beastDisplayId,
+                    focusedPhoneTaskId,
+                    phoneTaskId,
+                )) return true
             if (attempt + 1 < RESTORE_VERIFY_ATTEMPTS) SystemClock.sleep(RESTORE_VERIFY_DELAY_MS)
         }
         Log.w(
@@ -1716,6 +1757,11 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
             if (generation != phoneFocusLeaseGeneration || SystemClock.uptimeMillis() >= expiresAt) return
             if (!canRecoverPhoneFocus(phoneTaskId, ticket)) return
             val topTaskId = taskOnDisplay(Display.DEFAULT_DISPLAY)
+            // MainActivity intentionally uses FLAG_NOT_FOCUSABLE while Beast is
+            // active. Display 0 can therefore have PhoneUI as its top task without
+            // PhoneUI being the globally focused task. Treating that expected
+            // state as a failed lease causes repeated focus repairs that can steal
+            // input from Beast chrome.
             if (topTaskId == phoneTaskId) {
                 phoneFocusHandler.postDelayed(::check, PHONE_FOCUS_LEASE_POLL_MS)
                 return
@@ -1731,7 +1777,7 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
 
     /** Focus an already-running PhoneUI task without moving or recreating it. */
     private fun focusPhoneTask(phoneTaskId: Int): Boolean {
-        if (topTaskIdOnDisplay(Display.DEFAULT_DISPLAY) == phoneTaskId) return true
+        if (globallyFocusedPhoneTaskId() == phoneTaskId) return true
         val ticket = focusRecovery.ticket(phoneTaskId, SystemClock.uptimeMillis()) ?: return false
         if (!canRecoverPhoneFocus(phoneTaskId, ticket)) return false
         val task = observedTasks().firstOrNull {
@@ -1748,12 +1794,24 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
             "-f", PHONE_UI_REPAIR_FLAGS,
         )
         repeat(RESTORE_VERIFY_ATTEMPTS) { attempt ->
-            if (topTaskIdOnDisplay(Display.DEFAULT_DISPLAY) == phoneTaskId) return true
+            if (globallyFocusedPhoneTaskId() == phoneTaskId) return true
             if (attempt + 1 < RESTORE_VERIFY_ATTEMPTS) SystemClock.sleep(RESTORE_VERIFY_DELAY_MS)
         }
         return false
     }
 
+    /** Visibility on display 0 is not proof that Android routes focus there. */
+    private fun globallyFocusedPhoneTaskId(): Int? = runCatching {
+        val service = activityTaskManagerService()
+        val method = service.javaClass.methods.firstOrNull {
+            it.name == "getFocusedRootTaskInfo" && it.parameterTypes.isEmpty()
+        } ?: return@runCatching null
+        val root = method.invoke(service) ?: return@runCatching null
+        if (taskField(root, "displayId").intValue(-1) != Display.DEFAULT_DISPLAY) {
+            return@runCatching null
+        }
+        topTaskIdOnDisplay(Display.DEFAULT_DISPLAY)
+    }.onFailure { Log.w(TAG, "could not resolve global focus", it) }.getOrNull()
     // Live leaf task identity also works for Home's nested root/task hierarchy.
     private fun topTaskIdOnDisplay(displayId: Int): Int? = taskOnDisplay(displayId)
     /** Run a shell command and return its standard output, or `null` if it could not run. */
@@ -2192,16 +2250,21 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
                     // value: 0 = up, 1 = down, 2 = autorepeat. Only fire on the
                     // initial press so a held key doesn't spam zoom steps.
                     if (value != 1) return
-                    if (!(ctrlHeld.get() && altHeld.get())) return
-                    val hk = when (code) {
-                        KEY_A -> PrivilegedHotkeys.HK_CYCLE_LAYOUT
-                        KEY_Z -> PrivilegedHotkeys.HK_CYCLE_SCREEN_BAND
-                        KEY_X -> PrivilegedHotkeys.HK_TOGGLE_VIEW_MODE
-                        KEY_R -> PrivilegedHotkeys.HK_SDK_RECENTER
-                        KEY_C -> PrivilegedHotkeys.HK_ANCHOR_POSE
-                        KEY_EQUAL, KEY_KPPLUS -> PrivilegedHotkeys.HK_ZOOM_IN
-                        KEY_MINUS, KEY_KPMINUS -> PrivilegedHotkeys.HK_ZOOM_OUT
-                        else -> return
+                    if (!ctrlHeld.get()) return
+                    val hk = when {
+                        code == KEY_LEFT -> PrivilegedHotkeys.HK_FOCUS_LEFT
+                        code == KEY_RIGHT -> PrivilegedHotkeys.HK_FOCUS_RIGHT
+                        !altHeld.get() -> return
+                        else -> when (code) {
+                            KEY_A -> PrivilegedHotkeys.HK_CYCLE_LAYOUT
+                            KEY_Z -> PrivilegedHotkeys.HK_CYCLE_SCREEN_BAND
+                            KEY_X -> PrivilegedHotkeys.HK_TOGGLE_VIEW_MODE
+                            KEY_R -> PrivilegedHotkeys.HK_SDK_RECENTER
+                            KEY_C -> PrivilegedHotkeys.HK_ANCHOR_POSE
+                            KEY_EQUAL, KEY_KPPLUS -> PrivilegedHotkeys.HK_ZOOM_IN
+                            KEY_MINUS, KEY_KPMINUS -> PrivilegedHotkeys.HK_ZOOM_OUT
+                            else -> return
+                        }
                     }
                     try {
                         listener.onHotkey(hk)
@@ -2276,6 +2339,8 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
             private const val KEY_KPPLUS = 78
             private const val KEY_RIGHTCTRL = 97
             private const val KEY_RIGHTALT = 100
+            private const val KEY_LEFT = 105
+            private const val KEY_RIGHT = 106
 
             private fun u16le(b: ByteArray, off: Int): Int =
                 (b[off].toInt() and 0xff) or ((b[off + 1].toInt() and 0xff) shl 8)
@@ -2408,15 +2473,72 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
          */
         @JvmStatic
         fun main(args: Array<String>) {
+            val processStartNanos = System.nanoTime()
             try {
                 Log.i(TAG, "PrivilegedServer.main entered, pid=${android.os.Process.myPid()}")
-                killOrphanPrivilegedServers()
+                val usbMode = UsbLifeline.mode(args)
+                val usbToken = usbMode.token
+                if (usbToken == null && canSweepOrphanHelpers()) killOrphanPrivilegedServers()
                 Log.i(TAG, "orphan sweep returned; preparing Looper")
                 Looper.prepareMainLooper()
                 val systemContext = obtainSystemContext()
                     ?: throw IllegalStateException("could not obtain a system context")
                 val server = PrivilegedServer().also { it.setContext(systemContext) }
-                sendBinderToApp(server)
+                if (usbToken != null && !usbMode.detached) {
+                    Thread({
+                        try { while (System.`in`.read() != -1) { /* shell lifeline */ } }
+                        finally {
+                            try { server.exit() } finally { exitProcess(0) }
+                        }
+                    }, "usb-shell-lifeline").apply { isDaemon = true; start() }
+                }
+                if (usbToken == null) {
+                    sendBinderToApp(server)
+                } else {
+                    if (usbMode.detached) {
+                        Thread({
+                            val remaining = java.util.concurrent.TimeUnit.MINUTES.toNanos(10) -
+                                (System.nanoTime() - processStartNanos)
+                            if (remaining > 0) java.util.concurrent.TimeUnit.NANOSECONDS.sleep(remaining)
+                            try { server.exit() } finally { exitProcess(0) }
+                        }, "usb-detached-deadline").apply { isDaemon = true; start() }
+                    }
+                    try {
+                        // Bound even a stuck framework/provider transaction. This daemon cannot
+                        // keep the helper alive after startup cleanup exits the process.
+                        val offer = java.util.concurrent.FutureTask {
+                            if (usbMode.adbOnly) {
+                                val admission = callAppProvider(Bundle().apply {
+                                    putBinder(BinderReceiverProvider.EXTRA_BINDER, server)
+                                    putString(BinderReceiverProvider.EXTRA_USB_TOKEN, usbToken)
+                                }, BinderReceiverProvider.METHOD_ADMIT_ADB_ONLY)
+                                check(admission?.getBoolean(BinderReceiverProvider.EXTRA_ACCEPTED) == true) {
+                                    "ADB-only admission rejected: ${admission?.getString(BinderReceiverProvider.EXTRA_ERROR) ?: "no response"}"
+                                }
+                            }
+                            sendBinderToApp(server, usbToken)
+                        }
+                        Thread(offer, "usb-owner-offer").apply { isDaemon = true; start() }
+                        val reply = offer.get(15, java.util.concurrent.TimeUnit.SECONDS)
+                        check(reply?.getBoolean(BinderReceiverProvider.EXTRA_ACCEPTED) == true) {
+                            "USB ownership rejected"
+                        }
+                        val owner = checkNotNull(reply.getBinder(BinderReceiverProvider.EXTRA_OWNER))
+                        val ownerDeath = IBinder.DeathRecipient {
+                            try { server.exit() } finally { exitProcess(0) }
+                        }
+                        owner.linkToDeath(ownerDeath, 0)
+                        check(owner.pingBinder()) { "USB owner died during handoff" }
+                        // Keep the remote Binder and death recipient rooted for the whole lease.
+                        usbOwner = owner
+                        usbOwnerDeath = ownerDeath
+                        System.out.println("LATERAL_USB_READY")
+                    } catch (failure: Throwable) {
+                        System.err.println("LATERAL_USB_ERROR: ${failure.javaClass.simpleName}: ${failure.message.orEmpty().take(160)}")
+                        Log.e(TAG, "USB owner handoff failed", failure)
+                        try { server.exit() } finally { exitProcess(1) }
+                    }
+                }
                 Log.i(TAG, "PrivilegedServer ready; entering main loop")
                 Looper.loop()
             } catch (t: Throwable) {
@@ -2480,6 +2602,12 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
             Log.i(TAG, "orphan sweep complete; examined=$examined killed=$killed")
         }
 
+        /** Fail closed when the app cannot confirm that no accepted USB owner exists. */
+        private fun canSweepOrphanHelpers(): Boolean = runCatching {
+            val reply = callAppProvider(Bundle(), BinderReceiverProvider.METHOD_CAN_SWEEP_ORPHANS)
+            reply?.getBoolean(BinderReceiverProvider.EXTRA_CAN_SWEEP) == true
+        }.onFailure { Log.w(TAG, "orphan sweep ownership check failed; skipping sweep", it) }.getOrDefault(false)
+
         /** `ActivityThread.systemMain().getSystemContext()` — the standard app_process bootstrap. */
         private fun obtainSystemContext(): Context? = runCatching {
             val activityThread = Class.forName("android.app.ActivityThread")
@@ -2500,10 +2628,20 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
          * `IContentProvider.call` directly. Both are accessed reflectively because they
          * are not in the public SDK.
          */
-        private fun sendBinderToApp(binder: IBinder) {
+        private var usbOwner: IBinder? = null
+        private var usbOwnerDeath: IBinder.DeathRecipient? = null
+
+        private fun sendBinderToApp(binder: IBinder, usbToken: String? = null): Bundle? {
+            val extras = Bundle().apply {
+                putBinder(BinderReceiverProvider.EXTRA_BINDER, binder)
+                if (usbToken != null) putString(BinderReceiverProvider.EXTRA_USB_TOKEN, usbToken)
+            }
+            return callAppProvider(extras, BinderReceiverProvider.METHOD_SET_BINDER)
+        }
+
+        private fun callAppProvider(extras: Bundle, method: String): Bundle? {
             val authority = BinderReceiverProvider.AUTHORITY
             val token = Binder()
-            val extras = Bundle().apply { putBinder(BinderReceiverProvider.EXTRA_BINDER, binder) }
             val activityManager = activityManagerService()
                 ?: throw IllegalStateException("no IActivityManager binder")
             val iAmClass = Class.forName("android.app.IActivityManager")
@@ -2520,8 +2658,9 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
             val provider = holder.javaClass.getField("provider").get(holder)
                 ?: throw IllegalStateException("ContentProviderHolder.provider was null")
             try {
-                invokeProviderCall(provider, authority, extras)
+                val reply = invokeProviderCall(provider, authority, extras, method)
                 Log.i(TAG, "sent binder via getContentProviderExternal")
+                return reply
             } finally {
                 runCatching {
                     iAmClass.getMethod(
@@ -2545,7 +2684,8 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
          * identity the platform expects: API 31+ uses an `AttributionSource`; older
          * versions take a plain `(callingPkg, callingFeatureId)` pair.
          */
-        private fun invokeProviderCall(provider: Any, authority: String, extras: Bundle) {
+        private fun invokeProviderCall(provider: Any, authority: String, extras: Bundle,
+            method: String): Bundle? {
             val iCpClass = Class.forName("android.content.IContentProvider")
             val callMethods = iCpClass.declaredMethods.filter {
                 it.name == "call" && it.returnType == Bundle::class.java
@@ -2564,11 +2704,10 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
                     String::class.java,
                 )
                 val src = ctor.newInstance(Process.SHELL_UID, SHELL_PACKAGE, null)
-                attribCall.invoke(
+                return attribCall.invoke(
                     provider, src, authority,
-                    BinderReceiverProvider.METHOD_SET_BINDER, null, extras,
-                )
-                return
+                    method, null, extras,
+                ) as? Bundle
             }
             // Pre-API 31 fallback: (callingPkg, callingFeatureId?, authority, method, arg, extras).
             val stringCall = callMethods.firstOrNull {
@@ -2578,17 +2717,17 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
             val args: Array<Any?> = when (params.size) {
                 5 -> arrayOf(
                     SHELL_PACKAGE, authority,
-                    BinderReceiverProvider.METHOD_SET_BINDER, null, extras,
+                    method, null, extras,
                 )
                 6 -> arrayOf(
                     SHELL_PACKAGE, null, authority,
-                    BinderReceiverProvider.METHOD_SET_BINDER, null, extras,
+                    method, null, extras,
                 )
                 else -> throw IllegalStateException(
                     "unexpected IContentProvider.call arity ${params.size}",
                 )
             }
-            stringCall.invoke(provider, *args)
+            return stringCall.invoke(provider, *args) as? Bundle
         }
     }
 }
