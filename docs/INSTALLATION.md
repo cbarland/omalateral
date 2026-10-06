@@ -16,12 +16,13 @@ display controls, request the SDK from VITURE and follow the VITURE variant
 section below. For a local SDK-free debug build:
 
 1. Follow **Build from source** below, using the SDK-free stable command.
-2. On the phone, enable **Developer options** and **Wireless debugging**.
+2. Choose a privileged-helper backend: [Shizuku setup](SHIZUKU.md) is recommended.
+   Wireless ADB instead requires **Developer options** and **Wireless debugging**.
 3. Run `adb install -r app\build\outputs\apk\stable\debug\app-stable-debug.apk`.
 4. Connect the Beast glasses and launch LATERAL_ from the phone.
-5. In PhoneUI, pair/start the privileged helper when prompted. Use Android's
-   Wireless debugging **pair with code** flow and submit the code in the
-   LATERAL_ notification.
+5. In PhoneUI configuration, open **Privileged helper**. Select Shizuku and
+   authorize LATERAL, or select Wireless ADB and use Android's **pair with code**
+   flow, submitting the code in the LATERAL_ notification.
 6. Use PhoneUI as the touchpad and control surface. BeastUI should appear on
    the external display; hosted apps and display controls are selected from
    PhoneUI.
@@ -95,7 +96,7 @@ the SDK and fails at build time if its headers or ARM64 runtime are unavailable.
 
 Then follow the first-use steps above. A source build still
 requires a connected Beast for the VITURE-specific controls and Wireless
-debugging pairing for hosted apps.
+debugging pairing or authorized Shizuku for hosted apps.
 
 ## SDK and redistribution notice
 

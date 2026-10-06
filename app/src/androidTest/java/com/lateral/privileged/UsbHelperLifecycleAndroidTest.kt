@@ -41,8 +41,8 @@ object IsolatedWirelessHelper {
         }, "test-wireless-stdin").apply { isDaemon = true; start() }
         // Exercise the actual wireless provider publication, without production test switches.
         PrivilegedServer.Companion.javaClass.getDeclaredMethod(
-            "sendBinderToApp", IBinder::class.java, String::class.java,
-        ).apply { isAccessible = true }.invoke(PrivilegedServer.Companion, server, null)
+            "sendBinderToApp", IBinder::class.java, String::class.java, java.lang.Long::class.java,
+        ).apply { isAccessible = true }.invoke(PrivilegedServer.Companion, server, null, args.single().toLong())
         Looper.loop()
     }
 }
@@ -85,7 +85,7 @@ class UsbHelperLifecycleAndroidTest {
     private fun launch(token: String? = null, adbOnly: Boolean = false, detached: Boolean = false): Helper {
         val classpath = if (token == null && !adbOnly && !detached) "$apk:${instrumentation.context.applicationInfo.sourceDir}" else apk
         val entry = if (token == null && !adbOnly && !detached) IsolatedWirelessHelper::class.java.name else PrivilegedServer::class.java.name
-        val argument = when { detached -> " --usb-adb-bootstrap"; adbOnly -> " --usb-adb-only"; token != null -> " --usb-lifeline=$token"; else -> "" }
+        val argument = when { detached -> " --usb-adb-bootstrap"; adbOnly -> " --usb-adb-only"; token != null -> " --usb-lifeline=$token"; else -> " ${prepareWirelessAttempt()}" }
         val helper = Helper(instrumentation.uiAutomation.executeShellCommandRw("sh"))
         try {
             // exec preserves the printed PID and hands this retained stdin to app_process.
@@ -120,9 +120,25 @@ class UsbHelperLifecycleAndroidTest {
         error("Timed out waiting for LATERAL_USB_READY")
     }
 
-    private fun currentBinder(): IBinder? {
-        val field = PrivilegedService::class.java.getDeclaredField("service").apply { isAccessible = true }
-        return (field.get(PrivilegedService) as? IPrivilegedService)?.asBinder()
+    private fun currentBinder(): IBinder? = (PrivilegedService::class.java
+        .getDeclaredMethod("getService").apply { isAccessible = true }
+        .invoke(PrivilegedService) as? IPrivilegedService)?.asBinder()
+
+    /** Stage the real ADB callback path, with discovery replaced by our isolated shell publisher. */
+    private fun prepareWirelessAttempt(): Long {
+        PrivilegedService.init(instrumentation.targetContext)
+        val gate = PrivilegedService::class.java.getDeclaredField("activation").apply { isAccessible = true }
+            .get(PrivilegedService) as BackendAttemptGate
+        gate.selectAfterStop(PrivilegeBackendId.WIRELESS_ADB, Result.success(Unit))
+        val attempt = checkNotNull(gate.begin())
+        val backend = PrivilegedService::class.java.getDeclaredField("adbBackend").apply { isAccessible = true }
+            .get(PrivilegedService) as AdbPrivilegeBackend
+        (AdbPrivilegeBackend::class.java.getDeclaredField("currentAttempt").apply { isAccessible = true }
+            .get(backend) as java.util.concurrent.atomic.AtomicLong).set(attempt)
+        val callback = PrivilegedService::class.java.getDeclaredMethod("backendCallback", PrivilegeBackendId::class.java)
+            .apply { isAccessible = true }.invoke(PrivilegedService, PrivilegeBackendId.WIRELESS_ADB)
+        AdbPrivilegeBackend::class.java.getDeclaredField("callback").apply { isAccessible = true }.set(backend, callback)
+        return attempt
     }
 
     private fun awaitState(predicate: () -> Boolean) {

@@ -15,14 +15,13 @@ import com.lateral.InputSettings
 import com.lateral.MainActivity
 import com.lateral.PhoneView
 import com.lateral.privileged.PrivilegedService
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.roundToInt
 
 /** Virtual displays outlive a physical Beast mode re-enumeration and accept a new surface. */
 private object RetainedTaskDisplays {
-    private val displays = ConcurrentHashMap<Long, Int>()
-    fun retain(taskId: Long, displayId: Int) { displays[taskId] = displayId }
-    fun take(taskId: Long): Int? = displays.remove(taskId)
+    private val cache = RetainedDisplayCache()
+    fun retain(taskId: Long, displayId: Int, generation: Long) = cache.retain(taskId, displayId, generation)
+    fun take(taskId: Long): Int? = cache.take(taskId, PrivilegedService.helperGeneration)
 }
 
 /**
@@ -60,7 +59,49 @@ class TaskSurfaceView @JvmOverloads constructor(
         }
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var displayId: Int? = null
+    private var ownedDisplayId: Int? = null
+    private var displayHelperGeneration = PrivilegedService.helperGeneration
+    private var observedHelperGeneration = PrivilegedService.helperGeneration
+    private var displayId: Int?
+        get() = ownedDisplayId?.takeIf { displayHelperGeneration == PrivilegedService.helperGeneration }
+        set(value) { ownedDisplayId = value; displayHelperGeneration = PrivilegedService.helperGeneration }
+    private val helperListener: () -> Unit = {
+        mainHandler.post { syncHelperSession() }
+        Unit
+    }
+
+    private fun syncHelperSession() {
+        if (released) return
+        val generation = PrivilegedService.helperGeneration
+        if (generation != observedHelperGeneration) {
+            observedHelperGeneration = generation
+            val staleId = ownedDisplayId
+            displayId = null
+            launchSent = false
+            routingBlocked = false
+            displayCreationInFlight = false
+            attempts = 0
+            lastWidth = 0
+            lastHeight = 0
+            lastDensityDpi = 0
+            renderedGeneration = -1
+            frameRecoveryAttempts = 0
+            secondaryMouseDown = false
+            primaryMouseDown = false
+            primaryMouseStreamed = false
+            routedPrimaryTouch = false
+            routedSecondaryClick = false
+            editorProbeGeneration++
+            mainHandler.removeCallbacksAndMessages(null)
+            staleId?.let(HostedTextInputSession::close)
+            onAvailabilityChanged?.invoke(false)
+        }
+        if (PrivilegedService.isBridgeReady() && isAvailable && displayId == null) {
+            createDisplayWhenReady()
+            onAvailabilityChanged?.invoke(displayId != null)
+            scheduleFrameWatchdog(surfaceGeneration)
+        }
+    }
     private var lastWidth = 0
     private var lastHeight = 0
     private var lastDensityDpi = 0
@@ -87,6 +128,7 @@ class TaskSurfaceView @JvmOverloads constructor(
     private var editorProbeGeneration = 0
 
     init {
+        PrivilegedService.addListener(helperListener)
         surfaceTextureListener = this
         isOpaque = true
         isFocusable = true
@@ -141,8 +183,9 @@ class TaskSurfaceView @JvmOverloads constructor(
     }
 
     private fun scheduleFrameWatchdog(generation: Int) {
+        val helperGeneration = PrivilegedService.helperGeneration
         mainHandler.postDelayed({
-            if (released || generation != surfaceGeneration || !isAvailable ||
+            if (released || helperGeneration != PrivilegedService.helperGeneration || generation != surfaceGeneration || !isAvailable ||
                 renderedGeneration == generation
             ) return@postDelayed
             recoverMissingFrame(generation)
@@ -189,7 +232,7 @@ class TaskSurfaceView @JvmOverloads constructor(
         // A verified display that cannot produce a frame after reattachment is stale.
         // Releasing it returns the exact Android task to the phone before a clean display
         // is created and the same task id is restored.
-        PrivilegedService.releaseVirtualDisplay(id)
+        PrivilegedService.releaseVirtualDisplay(id, displayHelperGeneration)
         displayId = null
         launchSent = false
         lastWidth = 0
@@ -203,10 +246,11 @@ class TaskSurfaceView @JvmOverloads constructor(
     /** Reattaching a minimized card can expose Home on display 0. Repair only that
      * transient state; a deliberate phone-side task switch must remain untouched. */
     private fun schedulePhoneFocusRepairAfterReattach(generation: Int) {
+        val helperGeneration = PrivilegedService.helperGeneration
         val phoneTaskId = MainActivity.currentPhoneTaskId()
         if (phoneTaskId < 0) return
         mainHandler.postDelayed({
-            if (released || generation != surfaceGeneration) return@postDelayed
+            if (released || helperGeneration != PrivilegedService.helperGeneration || generation != surfaceGeneration) return@postDelayed
             PrivilegedService.restorePhoneTaskIfStillHomeAsync(phoneTaskId)
         }, PHONE_FOCUS_REATTACH_DELAY_MS)
     }
@@ -395,6 +439,8 @@ class TaskSurfaceView @JvmOverloads constructor(
             requestFocus()
             return
         }
+        val creatingGeneration = PrivilegedService.helperGeneration
+        val creatingSurface = surfaceGeneration
         displayCreationInFlight = true
         val result = try {
             PrivilegedService.createHostedVirtualDisplay(
@@ -406,6 +452,7 @@ class TaskSurfaceView @JvmOverloads constructor(
         } finally {
             displayCreationInFlight = false
         }
+        if (released || creatingGeneration != PrivilegedService.helperGeneration || creatingSurface != surfaceGeneration) return
         val id = when (result) {
             is PrivilegedService.HostedDisplayResult.Ready -> result.displayId
             PrivilegedService.HostedDisplayResult.KeyboardRoutingUnavailable -> {
@@ -498,7 +545,7 @@ class TaskSurfaceView @JvmOverloads constructor(
     }
 
     private fun rejectDisplayForImeRouting(id: Int?) {
-        id?.let { PrivilegedService.releaseVirtualDisplay(it) }
+        id?.let { PrivilegedService.releaseVirtualDisplay(it, displayHelperGeneration) }
         displayId = null
         launchSent = false
         routingBlocked = true
@@ -507,12 +554,13 @@ class TaskSurfaceView @JvmOverloads constructor(
 
     /** Called after helper recovery to recreate or re-verify the hosted display safely. */
     fun retryImeRouting() {
+        syncHelperSession()
         if (released || displayCreationInFlight) return
         routingBlocked = false
         attempts = 0
         val id = displayId
         if (id != null && !PrivilegedService.ensureHostedDisplayImeRouting(id)) {
-            PrivilegedService.releaseVirtualDisplay(id)
+            PrivilegedService.releaseVirtualDisplay(id, displayHelperGeneration)
             displayId = null
             launchSent = false
         }
@@ -619,11 +667,12 @@ class TaskSurfaceView @JvmOverloads constructor(
         // hosted app directly; skip the probe only then. With no physical keyboard, fall
         // back to the embedded software keyboard (the editor still needs detection).
         if (nativePhoneInput && PhoneView.externalKeyboardPresent) return
+        val helperGeneration = PrivilegedService.helperGeneration
         val generation = ++editorProbeGeneration
         fun probe(attempt: Int) {
-            if (released || generation != editorProbeGeneration || this.displayId != displayId) return
+            if (released || helperGeneration != PrivilegedService.helperGeneration || generation != editorProbeGeneration || this.displayId != displayId) return
             PrivilegedService.queryFocusedEditor(displayId) { editor ->
-                if (released || generation != editorProbeGeneration || this.displayId != displayId) {
+                if (released || helperGeneration != PrivilegedService.helperGeneration || generation != editorProbeGeneration || this.displayId != displayId) {
                     return@queryFocusedEditor
                 }
                 if (editor != null) {
@@ -696,11 +745,12 @@ class TaskSurfaceView @JvmOverloads constructor(
     fun release() {
         if (released) return
         released = true
+        PrivilegedService.removeListener(helperListener)
         cancelRoutedPointer()
         mainHandler.removeCallbacksAndMessages(null)
         displayId?.let {
             HostedTextInputSession.close(it)
-            PrivilegedService.releaseVirtualDisplay(it)
+            PrivilegedService.releaseVirtualDisplay(it, displayHelperGeneration)
         }
         displayId = null
         outputSurface?.release()
@@ -710,11 +760,12 @@ class TaskSurfaceView @JvmOverloads constructor(
     fun retainForReattach() {
         if (released) return
         released = true
+        PrivilegedService.removeListener(helperListener)
         mainHandler.removeCallbacksAndMessages(null)
         val item = task
         val id = displayId
         id?.let(HostedTextInputSession::close)
-        if (item != null && id != null) RetainedTaskDisplays.retain(item.id, id)
+        if (item != null && id != null) RetainedTaskDisplays.retain(item.id, id, displayHelperGeneration)
         displayId = null
         outputSurface?.release()
         outputSurface = null
@@ -746,6 +797,7 @@ class TaskSurfaceView @JvmOverloads constructor(
      * the tracked app task to this display. The callback runs on the main thread.
      */
     fun catchBackExit(callback: (Boolean) -> Unit) {
+        val helperGeneration = PrivilegedService.helperGeneration
         val id = displayId
         val item = task
         if (id == null || item == null) {
@@ -759,6 +811,7 @@ class TaskSurfaceView @JvmOverloads constructor(
         }
 
         PrivilegedService.queryDisplayHasPackage(id, item.packageName) { present ->
+            if (released || helperGeneration != PrivilegedService.helperGeneration) { callback(false); return@queryDisplayHasPackage }
             if (present) {
                 callback(false)
                 return@queryDisplayHasPackage
@@ -771,24 +824,24 @@ class TaskSurfaceView @JvmOverloads constructor(
                     PrivilegedService.restoreTaskPreservingPhoneFocusAsync(
                         recentTaskId, id, phoneTaskId,
                     ) {
-                        if (!released) {
+                        if (!released && helperGeneration == PrivilegedService.helperGeneration) {
                             mainHandler.postDelayed({
-                                if (!released) callback(true)
+                                if (!released && helperGeneration == PrivilegedService.helperGeneration) callback(true)
                             }, RECOVERY_SETTLE_MS)
                         }
                     }
                 } else {
                     PrivilegedService.restoreRecentTaskOnDisplay(recentTaskId, id) {
-                        if (!released) {
+                        if (!released && helperGeneration == PrivilegedService.helperGeneration) {
                             mainHandler.postDelayed({
-                                if (!released) callback(true)
+                                if (!released && helperGeneration == PrivilegedService.helperGeneration) callback(true)
                             }, RECOVERY_SETTLE_MS)
                         }
                     }
                 }
             } else {
                 PrivilegedService.launchApp(id, item.packageName, item.activityName)
-                mainHandler.postDelayed({ callback(true) }, RECOVERY_SETTLE_MS)
+                mainHandler.postDelayed({ callback(helperGeneration == PrivilegedService.helperGeneration && !released) }, RECOVERY_SETTLE_MS)
             }
         }
     }

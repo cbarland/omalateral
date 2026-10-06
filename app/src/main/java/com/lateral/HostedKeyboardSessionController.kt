@@ -41,13 +41,29 @@ class HostedKeyboardSessionController(
 
     fun recoverStaleSession(complete: (() -> Unit)? = null) {
         val stalePrevious = prefs.getString(KEY_PREVIOUS_IME, "").orEmpty()
-        if (stalePrevious.isBlank()) {
-            complete?.invoke()
+        val expected = generation
+        if (stalePrevious.isBlank()) { complete?.invoke(); return }
+        PrivilegedService.restoreSessionInputMethod(imeId, stalePrevious) { result ->
+            if (expected != generation) return@restoreSessionInputMethod
+            confirmRestoration(result, expected) { complete?.invoke() }
+        }
+    }
+
+    private fun confirmRestoration(result: PrivilegedService.SessionImeResult, expected: Long,
+        complete: (Boolean) -> Unit) {
+        if (expected != generation) return
+        if (com.lateral.privileged.ImeRecoveryPolicy.confirmed(result.code, null, imeId)) {
+            clearRecoveryRecord()
+            previousImeId = ""
+            complete(true)
             return
         }
-        PrivilegedService.restoreSessionInputMethod(imeId, stalePrevious) {
-            if (it != PrivilegedService.SessionImeResult.HELPER_UNAVAILABLE) clearRecoveryRecord()
-            complete?.invoke()
+        // A failed fallback is not proof of restoration. Verify the user's selected IME.
+        PrivilegedService.getImeClientSnapshot { snapshot ->
+            if (expected != generation) return@getImeClientSnapshot
+            val restored = com.lateral.privileged.ImeRecoveryPolicy.confirmed(result.code, snapshot?.selectedImeId, imeId)
+            if (restored) { clearRecoveryRecord(); previousImeId = "" }
+            complete(restored)
         }
     }
 
@@ -56,6 +72,15 @@ class HostedKeyboardSessionController(
         target = next
         updateState(State.ACTIVATING, "Connecting keyboard…")
         val requestGeneration = generation
+        recoverStaleSession {
+            if (requestGeneration != generation || target != next) return@recoverStaleSession
+            if (prefs.getString(KEY_PREVIOUS_IME, "").orEmpty().isNotBlank()) {
+                fail("Previous keyboard session still needs recovery", restore = false)
+            } else activate(next, requestGeneration)
+        }
+    }
+
+    private fun activate(next: HostedTextInputSession.Target, requestGeneration: Long) {
         PrivilegedService.beginSessionInputMethod(imeId, ownerToken) { activation ->
             if (requestGeneration != generation || target != next) return@beginSessionInputMethod
             if (activation.result != PrivilegedService.SessionImeResult.SUCCESS) {
@@ -76,32 +101,35 @@ class HostedKeyboardSessionController(
 
     fun end(reason: String = "session ended") {
         generation++
+        val expected = generation
         target = null
         handler.removeCallbacksAndMessages(null)
-        if (state == State.IDLE && previousImeId.isBlank()) return
+        val restoreId = previousImeId.ifBlank { prefs.getString(KEY_PREVIOUS_IME, "").orEmpty() }
+        if (state == State.IDLE && restoreId.isBlank()) return
         updateState(State.RESTORING, null)
-        val restoreId = previousImeId.ifBlank {
-            prefs.getString(KEY_PREVIOUS_IME, "").orEmpty()
-        }
         if (restoreId.isBlank()) {
             val switched = EmbeddedImeRuntime.switchToPreviousInputMethod()
-            Log.i(TAG, "session end without recorded previous IME reason=$reason fallback=$switched")
-            finishRestore()
+            Log.i(TAG, "session end without recovery record reason=$reason fallback=$switched")
+            updateState(State.IDLE, null)
             return
         }
         PrivilegedService.restoreSessionInputMethod(imeId, restoreId) { result ->
-            if (result == PrivilegedService.SessionImeResult.HELPER_UNAVAILABLE) {
-                EmbeddedImeRuntime.switchToPreviousInputMethod()
+            if (expected != generation) return@restoreSessionInputMethod
+            if (result == PrivilegedService.SessionImeResult.HELPER_UNAVAILABLE) EmbeddedImeRuntime.switchToPreviousInputMethod()
+            confirmRestoration(result, expected) { restored ->
+                updateState(if (restored) State.IDLE else State.UNAVAILABLE,
+                    if (restored) null else "Keyboard restoration will retry after helper recovery")
             }
-            Log.i(TAG, "session IME restored reason=$reason result=$result")
-            finishRestore()
         }
     }
 
     fun onHelperUnavailable() {
-        if (state == State.IDLE) return
+        generation++
+        target = null
+        handler.removeCallbacksAndMessages(null)
+        if (state == State.IDLE && prefs.getString(KEY_PREVIOUS_IME, "").orEmpty().isBlank()) return
         EmbeddedImeRuntime.switchToPreviousInputMethod()
-        fail("Keyboard helper unavailable", restore = false)
+        updateState(State.UNAVAILABLE, "Keyboard helper unavailable")
     }
 
     fun destroy() {
@@ -144,25 +172,17 @@ class HostedKeyboardSessionController(
 
     private fun fail(message: String, restore: Boolean = true) {
         Log.w(TAG, "$message targetTask=${target?.androidTaskId} display=${target?.displayId}")
+        generation++
+        val expected = generation
+        target = null
+        handler.removeCallbacksAndMessages(null)
         updateState(State.UNAVAILABLE, message)
-        if (restore) {
-            val restoreId = previousImeId.ifBlank {
-                prefs.getString(KEY_PREVIOUS_IME, "").orEmpty()
-            }
-            if (restoreId.isNotBlank()) {
-                PrivilegedService.restoreSessionInputMethod(imeId, restoreId) {
-                    if (it != PrivilegedService.SessionImeResult.HELPER_UNAVAILABLE) {
-                        clearRecoveryRecord()
-                    }
-                }
+        val restoreId = previousImeId.ifBlank { prefs.getString(KEY_PREVIOUS_IME, "").orEmpty() }
+        if (restore && restoreId.isNotBlank()) {
+            PrivilegedService.restoreSessionInputMethod(imeId, restoreId) {
+                confirmRestoration(it, expected) { }
             }
         }
-    }
-
-    private fun finishRestore() {
-        previousImeId = ""
-        clearRecoveryRecord()
-        updateState(State.IDLE, null)
     }
 
     private fun clearRecoveryRecord() {

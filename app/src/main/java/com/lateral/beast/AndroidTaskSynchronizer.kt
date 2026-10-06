@@ -14,12 +14,23 @@ object AndroidTaskSynchronizer {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var appContext: Context
     private var started = false
+    private var requestId = 0L
+    private var observedGeneration = -1L
     private var inFlight = false
     private var firstSnapshot = true
     private var homePackages = emptySet<String>()
 
     private val privilegedListener: () -> Unit = {
-        if (PrivilegedService.state == PrivilegedService.State.READY) requestImmediate()
+        main.post {
+            val generation = PrivilegedService.helperGeneration
+            if (generation != observedGeneration || !PrivilegedService.isBridgeReady()) {
+                observedGeneration = generation
+                requestId++
+                inFlight = false
+            }
+            if (PrivilegedService.isBridgeReady()) requestImmediate()
+        }
+        Unit
     }
     private val poll = object : Runnable {
         override fun run() {
@@ -51,9 +62,12 @@ object AndroidTaskSynchronizer {
     private fun reconcileNow() {
         if (PrivilegedService.state != PrivilegedService.State.READY || inFlight) return
         inFlight = true
+        val expectedRequest = ++requestId
+        val expectedGeneration = PrivilegedService.helperGeneration
         PrivilegedService.queryTaskSnapshots { raw ->
+            if (expectedRequest != requestId) return@queryTaskSnapshots
             inFlight = false
-            if (raw == null) return@queryTaskSnapshots
+            if (raw == null || expectedGeneration != PrivilegedService.helperGeneration || !PrivilegedService.isBridgeReady()) return@queryTaskSnapshots
             val snapshots = raw.asSequence()
                 .filter { it.packageName != appContext.packageName }
                 .filter { it.packageName !in homePackages }

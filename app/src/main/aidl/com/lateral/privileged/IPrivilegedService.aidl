@@ -15,6 +15,8 @@ interface IPrivilegedService {
     void destroy() = 16777114;
 
     void exit() = 1;
+    /** Validate the helper protocol before publishing READY. */
+    int getProtocolVersion() = 51;
 
     /** Launch packageName/activityName onto the given display. Returns true on success. */
     boolean launchOnDisplay(int displayId, String packageName, String activityName) = 2;

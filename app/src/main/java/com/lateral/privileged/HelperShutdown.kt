@@ -2,28 +2,26 @@ package com.lateral.privileged
 
 import android.os.IBinder
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 
-/** Completion means observed process death, rather than merely sending a stop transaction. */
+/** Both the remote stop transaction and observed death are bounded. */
 internal object HelperShutdown {
     fun awaitDeath(binder: IBinder?, stop: () -> Unit) {
-        if (binder == null) {
-            stop()
-            return
-        }
-        if (!binder.pingBinder()) { runCatching(stop); return }
         val died = CountDownLatch(1)
         val death = IBinder.DeathRecipient { died.countDown() }
+        val linked = binder != null && runCatching { binder.linkToDeath(death, 0); true }.getOrDefault(false)
+        val request = FutureTask { runCatching(stop) }
+        Thread(request, "lateral-helper-stop").apply { isDaemon = true; start() }
         try {
-            val failure = runCatching {
-                binder.linkToDeath(death, 0)
-                stop()
-            }.exceptionOrNull()
+            val outcome = request.get(5, TimeUnit.SECONDS)
+            if (binder == null) { outcome.getOrThrow(); return }
             if (binder.pingBinder() && !died.await(5, TimeUnit.SECONDS)) {
-                throw IllegalStateException("Helper shutdown could not be confirmed", failure)
+                throw IllegalStateException("Helper shutdown could not be confirmed", outcome.exceptionOrNull())
             }
         } finally {
-            runCatching { binder.unlinkToDeath(death, 0) }
+            request.cancel(true)
+            if (linked) runCatching { binder?.unlinkToDeath(death, 0) }
         }
     }
 }

@@ -39,8 +39,6 @@ class ShizukuPrivilegeBackend(context: Context) : PrivilegeBackend {
     private val binderDead = Shizuku.OnBinderDeadListener {
         control.execute {
             if (Shizuku.pingBinder()) return@execute
-            connection = null
-            helper = null
             deadline?.cancel(false)
             unavailable(currentAttempt.get(), UnavailableReason.CONNECTION_LOST)
         }
@@ -59,6 +57,7 @@ class ShizukuPrivilegeBackend(context: Context) : PrivilegeBackend {
     }
 
     override fun start(attemptId: Long, callback: PrivilegeBackend.Callback) {
+        if (currentAttempt.get() == attemptId) return
         currentAttempt.set(attemptId)
         control.execute {
             this.callback = callback
@@ -130,8 +129,6 @@ class ShizukuPrivilegeBackend(context: Context) : PrivilegeBackend {
                 override fun onServiceDisconnected(name: ComponentName) {
                     control.execute {
                         if (connection !== this || currentAttempt.get() != attempt) return@execute
-                        connection = null
-                        helper = null
                         unavailable(attempt, UnavailableReason.CONNECTION_LOST)
                     }
                 }
@@ -178,10 +175,18 @@ class ShizukuPrivilegeBackend(context: Context) : PrivilegeBackend {
     fun helperLost(binder: IBinder) {
         control.execute {
             if (helper != binder) return@execute
-            helper = null
-            connection?.let { runCatching { Shizuku.unbindUserService(args, it, false) } }
-            connection = null
-            deadline?.cancel(false)
+            try {
+                if (binder.pingBinder()) HelperShutdown.awaitDeath(binder) {
+                    IPrivilegedService.Stub.asInterface(binder).exit()
+                }
+                helper = null
+                connection?.let { runCatching { Shizuku.unbindUserService(args, it, false) } }
+                connection = null
+                deadline?.cancel(false)
+            } catch (failure: Exception) {
+                Log.w(TAG, "Lost helper cleanup could not be confirmed", failure)
+                unavailable(currentAttempt.get(), UnavailableReason.CONNECTION_LOST)
+            }
         }
     }
 

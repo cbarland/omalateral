@@ -71,8 +71,13 @@ class BinderReceiverProvider : ContentProvider() {
                 Log.w(TAG, "rejecting ADB Binder without a startup attempt id")
                 return null
             }
-            PrivilegedService.offerAdbBinder(binder, attemptId)
-            return null
+            val reply = PrivilegedService.offerAdbBinder(binder, attemptId)
+            return try { reply.get(10, TimeUnit.SECONDS) } catch (failure: Exception) {
+                reply.cancel(false)
+                if (failure is InterruptedException) Thread.currentThread().interrupt()
+                Log.w(TAG, "ADB ownership acknowledgement failed", failure)
+                null
+            }
         }
         val reply = PrivilegedService.offerUsbBinder(binder, usbToken)
         return try { reply.get(10, TimeUnit.SECONDS) } catch (failure: Exception) {

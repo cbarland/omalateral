@@ -40,7 +40,7 @@ depend on the phone firmware, so re-test the privileged path after system update
 
 ## Important platform behavior
 
-Hosting third-party apps on Beast relies on a shell-privileged helper started through Wireless debugging. The helper creates trusted virtual displays, moves individual Android tasks, injects pointer/gesture input, and manages display lifecycle.
+Hosting third-party apps on Beast relies on a shell-privileged helper activated through [Shizuku or Wireless ADB](docs/SHIZUKU.md). The helper creates trusted virtual displays, moves individual Android tasks, injects pointer/gesture input, and manages display lifecycle.
 
 For native text editing, LATERAL_ temporarily selects its embedded FlorisBoard
 session IME. The hosted editor keeps its real `InputConnection` and focus while
@@ -78,7 +78,7 @@ Run the USB helper lifecycle instrumentation on an Android 12 or newer emulator 
 - Nubia NX789J running the supported Android 15 firmware.
 - An external display for monitor mode; VITURE Beast glasses are supported by
   the optional SDK-backed variant.
-- Developer options and Wireless debugging enabled for the initial privileged-helper pairing.
+- Shizuku v13+ running in shell mode and authorization, or Developer options and Wireless debugging for the ADB backend.
 - Android Studio with JDK 17 and an Android SDK/NDK installation suitable for the project.
 - Rust stable (minimal profile) and CMake 4.1.2 for FlorisBoard's arm64 native engine.
 - ADB available when installing development builds.
@@ -137,7 +137,7 @@ adb install -r app/build/outputs/apk/stable/debug/app-stable-debug.apk
 
 1. Connect the Beast glasses.
 2. Launch LATERAL_ from the phone.
-3. In PhoneUI, pair/start the privileged helper when prompted. Accept the Wireless debugging pairing request on the phone.
+3. In PhoneUI configuration, select **Privileged helper**. Authorize Shizuku or pair Wireless ADB on the phone.
 4. Open **Apps** to show the Beast launcher, or select an existing Android task in the shared navigator.
 5. Use the PhoneUI touchpad to control the glasses workspace.
 

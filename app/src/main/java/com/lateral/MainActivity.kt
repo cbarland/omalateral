@@ -165,16 +165,24 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             }
         }
     }
+    private var recoveredKeyboardHelperGeneration = -1L
     private val privilegedStateListener: () -> Unit = {
         runOnUiThread {
             if (::inputDebugText.isInitialized) {
                 inputDebugText.text = privilegedStatusText()
             }
             if (PrivilegedService.state == PrivilegedService.State.READY) {
+                if (::hostedKeyboardController.isInitialized && recoveredKeyboardHelperGeneration != PrivilegedService.helperGeneration) {
+                    recoveredKeyboardHelperGeneration = PrivilegedService.helperGeneration
+                    hostedKeyboardController.recoverStaleSession()
+                }
                 BeastWorkspaceController.cleanupHistoricalTasks(this)
             } else if (::hostedKeyboardController.isInitialized) {
+                HostedTextInputSession.close()
                 hostedKeyboardController.onHelperUnavailable()
             }
+            privilegePanelStatus?.text = privilegeStatusSummary()
+            privilegePanelAction?.text = privilegePanelActionLabel()
             syncPairingNotification()
             maybeShowAdbBridgeDialog()
         }
@@ -322,6 +330,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             window.decorView.removeCallbacks(beastSearchFocus)
         }
         cancelPhoneFocusRepair()
+        privilegeBackendDialog?.dismiss()
         PrivilegedService.removeListener(privilegedStateListener)
         InputSettings.removeSensitivityListener(sensitivityListener)
         InputSettings.removeAppearanceListener(appearanceListener)
@@ -726,7 +735,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     private fun privilegedStatusText(): String = when {
         PrivilegedService.bridgeTransport() == PrivilegedService.BridgeTransport.SHIZUKU -> "Shizuku connected · embedded keyboard available"
         PrivilegedService.state != PrivilegedService.State.READY ->
-            "Input bridge: ${PrivilegedService.state}"
+            privilegeStatusSummary()
         PrivilegedService.bridgeTransport() == PrivilegedService.BridgeTransport.NONE ->
             "Input bridge: Connecting…"
         else -> "Input bridge: READY · ${PrivilegedService.bridgeTransport()} · embedded keyboard available"
@@ -929,65 +938,90 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     }
 
     private var privilegeBackendDialog: android.app.AlertDialog? = null
+    private var privilegePanelStatus: TextView? = null
+    private var privilegePanelAction: android.widget.Button? = null
+
+    private fun privilegeStatusSummary(): String = when (PrivilegedService.state) {
+        PrivilegedService.State.READY -> when (PrivilegedService.bridgeTransport()) {
+            PrivilegedService.BridgeTransport.SHIZUKU -> "Shizuku connected."
+            PrivilegedService.BridgeTransport.USB -> "USB helper connected."
+            else -> "Wireless ADB connected."
+        }
+        PrivilegedService.State.SHIZUKU_NOT_INSTALLED -> "Install Shizuku, start it in ADB mode, then return here."
+        PrivilegedService.State.SHIZUKU_NOT_RUNNING -> "Shizuku is installed but stopped. Start it on the phone."
+        PrivilegedService.State.AUTHORIZATION_REQUIRED -> "Shizuku is running. Allow LATERAL to use it."
+        PrivilegedService.State.AUTHORIZATION_DENIED -> "Authorization was denied. Enable LATERAL in Shizuku's authorized applications."
+        PrivilegedService.State.UNSUPPORTED -> if (PrivilegedService.selectedBackend == com.lateral.privileged.PrivilegeBackendId.SHIZUKU)
+            "Use Shizuku 13 or later in ADB (shell) mode. Root mode is not supported."
+            else "Wireless ADB requires Android 11 or later."
+        PrivilegedService.State.START_TIMEOUT -> "The helper did not connect in time. Check the selected backend, then retry."
+        PrivilegedService.State.CONNECTION_LOST -> "Helper connection lost. Your workspace is retained; retry to reconnect."
+        PrivilegedService.State.DISCOVERING, PrivilegedService.State.CONNECTING, PrivilegedService.State.STARTING -> "Connecting helper…"
+        PrivilegedService.State.STOPPING -> "Stopping the current helper…"
+        PrivilegedService.State.STOPPED -> "Helper stopped. Retry to start it."
+        PrivilegedService.State.NEEDS_DEVELOPER_OPTIONS -> "Enable Developer options to use Wireless ADB."
+        PrivilegedService.State.NEEDS_WIRELESS_DEBUGGING -> "Enable Wireless debugging to use Wireless ADB."
+        PrivilegedService.State.NEEDS_PAIRING -> "Pair Wireless ADB using the notification while Android's pairing dialog is open."
+    }
+
+    private fun privilegePanelActionLabel(): String = when (PrivilegedService.state) {
+        PrivilegedService.State.SHIZUKU_NOT_INSTALLED -> "Install Shizuku"
+        PrivilegedService.State.SHIZUKU_NOT_RUNNING -> "Open Shizuku on the phone"
+        PrivilegedService.State.AUTHORIZATION_REQUIRED -> "Authorize LATERAL"
+        PrivilegedService.State.AUTHORIZATION_DENIED -> "Open Shizuku authorization settings"
+        PrivilegedService.State.READY -> "Restart helper"
+        else -> if (PrivilegedService.selectedBackend == com.lateral.privileged.PrivilegeBackendId.SHIZUKU) "Retry connection" else "Set up Wireless ADB"
+    }
 
     private fun showPrivilegeBackendPanel() {
         if (privilegeBackendDialog?.isShowing == true) return
         HostedTextInputSession.close()
         val lease = acquirePhoneWindowFocus()
-        val shizuku = PrivilegedService.selectedBackend == com.lateral.privileged.PrivilegeBackendId.SHIZUKU
-        val status = PrivilegedService.state
-        val action = when (status) {
-            PrivilegedService.State.SHIZUKU_NOT_INSTALLED -> "Install Shizuku"
-            PrivilegedService.State.SHIZUKU_NOT_RUNNING -> "Open Shizuku on the phone"
-            PrivilegedService.State.AUTHORIZATION_REQUIRED -> "Authorize LATERAL"
-            PrivilegedService.State.AUTHORIZATION_DENIED -> "Open Shizuku authorization settings"
-            PrivilegedService.State.READY -> "Restart helper"
-            else -> if (shizuku) "Retry connection" else "Pair Wireless ADB"
-        }
-        val message = when (status) {
-            PrivilegedService.State.READY -> if (shizuku) "Shizuku connected." else "ADB helper connected."
-            PrivilegedService.State.SHIZUKU_NOT_INSTALLED -> "Install Shizuku, start it in ADB mode, then return here."
-            PrivilegedService.State.SHIZUKU_NOT_RUNNING -> "Shizuku is installed but stopped. Start it on the phone."
-            PrivilegedService.State.AUTHORIZATION_REQUIRED -> "Shizuku is running. Allow LATERAL to use it."
-            PrivilegedService.State.AUTHORIZATION_DENIED -> "Authorization was denied. Enable LATERAL in Shizuku's authorized applications."
-            PrivilegedService.State.UNSUPPORTED -> "Shizuku requires version 13 or later running as shell. Root mode is not supported in this release. Wireless ADB requires Android 11 or later."
-            PrivilegedService.State.START_TIMEOUT -> "The helper did not connect in time. Retry after checking the selected backend."
-            PrivilegedService.State.CONNECTION_LOST -> "The helper connection was lost. Your workspace is retained; retry to reconnect."
-            PrivilegedService.State.DISCOVERING, PrivilegedService.State.CONNECTING, PrivilegedService.State.STARTING -> "Connecting helper…"
-            PrivilegedService.State.STOPPING -> "Stopping the current helper…"
-            PrivilegedService.State.STOPPED -> "Helper stopped. Retry to start it."
-            else -> "Wireless ADB uses Developer options and Wireless debugging pairing."
-        }
-        val entries = arrayOf(action, "Shizuku (recommended)", "Wireless ADB (self-contained)", "Stop helper")
         val completed: (Result<Unit>) -> Unit = { outcome ->
             outcome.exceptionOrNull()?.let { Toast.makeText(this, it.message ?: "Helper could not stop", Toast.LENGTH_LONG).show() }
         }
         try {
+            val content = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(20), dp(8), dp(20), dp(8))
+            }
+            val status = TextView(this).apply { text = privilegeStatusSummary(); setPadding(0, 0, 0, dp(12)) }
+            privilegePanelStatus = status
+            content.addView(status)
+            fun action(label: String, clicked: () -> Unit): android.widget.Button {
+                val button = android.widget.Button(this).apply {
+                    text = label
+                    setOnClickListener { privilegeBackendDialog?.dismiss(); clicked() }
+                }
+                content.addView(button)
+                return button
+            }
+            privilegePanelAction = action(privilegePanelActionLabel()) {
+                when (PrivilegedService.state) {
+                    PrivilegedService.State.SHIZUKU_NOT_INSTALLED -> startActivity(Intent(Intent.ACTION_VIEW,
+                        android.net.Uri.parse("https://shizuku.rikka.app/download/")))
+                    PrivilegedService.State.SHIZUKU_NOT_RUNNING, PrivilegedService.State.AUTHORIZATION_DENIED ->
+                        packageManager.getLaunchIntentForPackage(com.lateral.privileged.ShizukuPrivilegeBackend.MANAGER_PACKAGE)?.let(::startActivity)
+                    PrivilegedService.State.AUTHORIZATION_REQUIRED -> PrivilegedService.requestShizukuAuthorization()
+                    PrivilegedService.State.READY -> PrivilegedService.restartHelper(completed)
+                    else -> if (PrivilegedService.selectedBackend == com.lateral.privileged.PrivilegeBackendId.SHIZUKU) {
+                        PrivilegedService.retryHelper()
+                    } else if (PrivilegedService.state == PrivilegedService.State.NEEDS_PAIRING) {
+                        if (android.os.Build.VERSION.SDK_INT >= 33 && !PairingNotifier.canPost(this))
+                            notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS) else beginPairingSetup()
+                    } else { PrivilegedService.retryHelper(); openWirelessDebuggingSettings() }
+                }
+            }
+            action("Shizuku (recommended)") { PrivilegedService.selectBackend(com.lateral.privileged.PrivilegeBackendId.SHIZUKU, completed) }
+            action("Wireless ADB (self-contained)") { PrivilegedService.selectBackend(com.lateral.privileged.PrivilegeBackendId.WIRELESS_ADB, completed) }
+            action("Stop helper") { PrivilegedService.stopHelper(completed) }
             val dialog = android.app.AlertDialog.Builder(this)
-                .setTitle("Privileged helper · ${if (shizuku) "Shizuku" else "Wireless ADB"}")
-                .setItems(entries) { _, index -> when (index) {
-                    0 -> when (status) {
-                        PrivilegedService.State.SHIZUKU_NOT_INSTALLED -> startActivity(Intent(Intent.ACTION_VIEW,
-                            android.net.Uri.parse("https://shizuku.rikka.app/download/")))
-                        PrivilegedService.State.SHIZUKU_NOT_RUNNING, PrivilegedService.State.AUTHORIZATION_DENIED -> {
-                            packageManager.getLaunchIntentForPackage(com.lateral.privileged.ShizukuPrivilegeBackend.MANAGER_PACKAGE)
-                                ?.let(::startActivity)
-                        }
-                        PrivilegedService.State.AUTHORIZATION_REQUIRED -> PrivilegedService.requestShizukuAuthorization()
-                        PrivilegedService.State.READY -> PrivilegedService.restartHelper(completed)
-                        else -> if (shizuku) PrivilegedService.retryHelper() else if (
-                            android.os.Build.VERSION.SDK_INT >= 33 && !PairingNotifier.canPost(this)
-                        ) notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS) else beginPairingSetup()
-                    }
-                    1 -> PrivilegedService.selectBackend(com.lateral.privileged.PrivilegeBackendId.SHIZUKU, completed)
-                    2 -> PrivilegedService.selectBackend(com.lateral.privileged.PrivilegeBackendId.WIRELESS_ADB, completed)
-                    3 -> PrivilegedService.stopHelper(completed)
-                } }
-                .setNegativeButton("Close", null).create()
+                .setTitle("Privileged helper · ${PrivilegedService.selectedBackend.name.replace('_', ' ')}")
+                .setView(content).setNegativeButton("Close", null).create()
             privilegeBackendDialog = dialog
-            dialog.setOnDismissListener { privilegeBackendDialog = null; lease.release() }
-            // Items and a message cannot share AlertDialog's body, so keep status in the title.
-            dialog.setTitle("${if (shizuku) "Shizuku" else "Wireless ADB"}\n$message")
+            dialog.setOnDismissListener {
+                privilegeBackendDialog = null; privilegePanelStatus = null; privilegePanelAction = null; lease.release()
+            }
             dialog.show()
             dialog.window?.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
         } catch (error: RuntimeException) {
@@ -1013,6 +1047,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         if (PrivilegedService.selectedBackend == com.lateral.privileged.PrivilegeBackendId.SHIZUKU) {
             adbBridgeDialog?.dismiss()
             val status = PrivilegedService.state
+            if (status == PrivilegedService.State.READY) lastPromptedBridgeState = null
             if (status !in setOf(PrivilegedService.State.READY, PrivilegedService.State.DISCOVERING,
                     PrivilegedService.State.STARTING, PrivilegedService.State.STOPPING,
                     PrivilegedService.State.STOPPED) && lastPromptedBridgeState != status) {

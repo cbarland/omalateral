@@ -21,6 +21,7 @@ class AdbPrivilegeBackend(context: Context) : PrivilegeBackend {
     private val timeout = Executors.newSingleThreadScheduledExecutor { Thread(it, "lateral-adb-timeout") }
     private val currentAttempt = AtomicLong(0)
     @Volatile private var callback: PrivilegeBackend.Callback? = null
+    private var connection: AdbConnectionManager? = null
     @Volatile private var stream: AdbStream? = null
     private var streamAttempt = 0L
     @Volatile private var helper: IBinder? = null
@@ -34,68 +35,68 @@ class AdbPrivilegeBackend(context: Context) : PrivilegeBackend {
         callback.onConnecting(attemptId)
         control.execute {
             try {
-            if (!isCurrent(attemptId)) return@execute
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-                unavailable(attemptId, UnavailableReason.INCOMPATIBLE_RUNTIME)
-                return@execute
-            }
-            if (!isDeveloperOptionsEnabled()) {
-                unavailable(attemptId, UnavailableReason.DEVELOPER_OPTIONS_REQUIRED)
-                return@execute
-            }
-            if (!hasPaired()) {
-                unavailable(attemptId, UnavailableReason.PAIRING_REQUIRED)
-                return@execute
-            }
-
-            val endpoints = AdbDiscovery.discoverConnect(appContext, DISCOVERY_TIMEOUT_MS)
-            if (!isCurrent(attemptId)) return@execute
-            if (endpoints.isEmpty()) {
-                unavailable(attemptId, UnavailableReason.WIRELESS_DEBUGGING_REQUIRED)
-                return@execute
-            }
-            val adb = AdbConnectionManager.getInstance(appContext)
-            if (!adb.isConnected) {
-                var connected = false
-                var lastFailure: Exception? = null
-                for (endpoint in endpoints) {
-                    if (!isCurrent(attemptId)) return@execute
-                    try {
-                        if (adb.connect(endpoint.host, endpoint.port)) {
-                            connected = true
-                            break
-                        }
-                    } catch (e: AdbPairingRequiredException) {
-                        markPaired(false)
-                        unavailable(attemptId, UnavailableReason.PAIRING_REQUIRED)
-                        return@execute
-                    } catch (e: Exception) {
-                        lastFailure = e
-                        Log.w(TAG, "ADB connect ${endpoint.host}:${endpoint.port} failed", e)
-                    }
+                if (!isCurrent(attemptId)) return@execute
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                    unavailable(attemptId, UnavailableReason.INCOMPATIBLE_RUNTIME)
+                    return@execute
                 }
-                if (!connected) {
-                    Log.w(TAG, "No ADB endpoint accepted the connection", lastFailure)
+                if (!isDeveloperOptionsEnabled()) {
+                    unavailable(attemptId, UnavailableReason.DEVELOPER_OPTIONS_REQUIRED)
+                    return@execute
+                }
+                if (!hasPaired()) {
+                    unavailable(attemptId, UnavailableReason.PAIRING_REQUIRED)
+                    return@execute
+                }
+
+                val endpoints = AdbDiscovery.discoverConnect(appContext, DISCOVERY_TIMEOUT_MS)
+                if (!isCurrent(attemptId)) return@execute
+                if (endpoints.isEmpty()) {
                     unavailable(attemptId, UnavailableReason.WIRELESS_DEBUGGING_REQUIRED)
                     return@execute
                 }
-            }
-
-            if (!isCurrent(attemptId)) return@execute
-            val started = ServerBootstrap.start(appContext, adb, attemptId)
-            if (started == null) {
-                unavailable(attemptId, UnavailableReason.START_FAILED)
-                return@execute
-            }
-            stream = started
-            streamAttempt = attemptId
-            deadline = timeout.schedule({
-                if (isCurrent(attemptId) && helper?.isBinderAlive != true) {
-                    unavailable(attemptId, UnavailableReason.START_TIMEOUT)
-                    currentAttempt.compareAndSet(attemptId, 0)
-                    control.execute { if (streamAttempt == attemptId && helper == null) closeResources() }
+                val adb = AdbConnectionManager.getInstance(appContext).also { connection = it }
+                if (!adb.isConnected) {
+                    var connected = false
+                    var lastFailure: Exception? = null
+                    for (endpoint in endpoints) {
+                        if (!isCurrent(attemptId)) return@execute
+                        try {
+                            if (adb.connect(endpoint.host, endpoint.port)) {
+                                connected = true
+                                break
+                            }
+                        } catch (e: AdbPairingRequiredException) {
+                            markPaired(false)
+                            unavailable(attemptId, UnavailableReason.PAIRING_REQUIRED)
+                            return@execute
+                        } catch (e: Exception) {
+                            lastFailure = e
+                            Log.w(TAG, "ADB connect ${endpoint.host}:${endpoint.port} failed", e)
+                        }
+                    }
+                    if (!connected) {
+                        Log.w(TAG, "No ADB endpoint accepted the connection", lastFailure)
+                        unavailable(attemptId, UnavailableReason.WIRELESS_DEBUGGING_REQUIRED)
+                        return@execute
+                    }
                 }
-            }, START_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+
+                if (!isCurrent(attemptId)) return@execute
+                val started = ServerBootstrap.start(appContext, adb, attemptId)
+                if (started == null) {
+                    unavailable(attemptId, UnavailableReason.START_FAILED)
+                    return@execute
+                }
+                stream = started
+                streamAttempt = attemptId
+                deadline = timeout.schedule({
+                    if (isCurrent(attemptId) && helper?.isBinderAlive != true) {
+                        unavailable(attemptId, UnavailableReason.START_TIMEOUT)
+                        currentAttempt.compareAndSet(attemptId, 0)
+                        control.execute { if (streamAttempt == attemptId && helper == null) closeResources() }
+                    }
+                }, START_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             } catch (failure: Exception) {
                 Log.e(TAG, "ADB startup failed", failure)
                 unavailable(attemptId, UnavailableReason.START_FAILED)
@@ -106,14 +107,17 @@ class AdbPrivilegeBackend(context: Context) : PrivilegeBackend {
     /** Called only by the restricted ADB Binder receiver, with the bootstrap attempt token. */
     fun offerBinder(attemptId: Long, binder: IBinder) {
         control.execute {
-        if (!isCurrent(attemptId)) {
-            if (helper != binder) runCatching { IPrivilegedService.Stub.asInterface(binder).exit() }
-            return@execute
-        }
-        helper = binder
-        helperAttempt = attemptId
-        deadline?.cancel(false)
-        callback?.onConnected(attemptId, binder)
+            if (!isCurrent(attemptId)) {
+                if (helper != binder) runCatching {
+                    HelperShutdown.awaitDeath(binder) { IPrivilegedService.Stub.asInterface(binder).exit() }
+                    if (streamAttempt == attemptId && helper == null) closeResources()
+                }
+                return@execute
+            }
+            helper = binder
+            helperAttempt = attemptId
+            deadline?.cancel(false)
+            callback?.onConnected(attemptId, binder)
         }
     }
 
@@ -136,7 +140,7 @@ class AdbPrivilegeBackend(context: Context) : PrivilegeBackend {
                     done(false)
                     return@execute
                 }
-                val paired = AdbConnectionManager.getInstance(appContext)
+                val paired = AdbConnectionManager.getInstance(appContext).also { connection = it }
                     .pair(endpoint.host, endpoint.port, pairingCode)
                 markPaired(paired)
                 done(paired)
@@ -182,6 +186,8 @@ class AdbPrivilegeBackend(context: Context) : PrivilegeBackend {
         runCatching { stream?.close() }
         stream = null
         streamAttempt = 0
+        runCatching { connection?.disconnect() }
+        connection = null
     }
 
     private fun isDeveloperOptionsEnabled(): Boolean = runCatching {

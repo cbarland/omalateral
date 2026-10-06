@@ -17,6 +17,8 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.Process
+import android.os.Parcel
+import androidx.annotation.Keep
 import android.os.RemoteException
 import android.os.SystemClock
 import android.util.Log
@@ -37,7 +39,7 @@ import kotlin.system.exitProcess
  * trusted virtual displays, and hands itself back to the app over a Binder. It exists in
  * two activation modes, both passing through this same class:
  *
- *  - **Shizuku** (transitional). Shizuku binds it as a user service; the AIDL Stub is
+ *  - **Shizuku**. Shizuku binds it as a user service; the AIDL Stub is
  *    delivered through Shizuku's `bindUserService` callback.
  *  - **UxSpace's own bootstrap** (`docs/PRIVILEGE.md`). `app_process` invokes [main], the
  *    server is constructed in the shell-uid process, and its Binder is handed to the app
@@ -48,7 +50,19 @@ import kotlin.system.exitProcess
  * directly; `createVirtualDisplay` uses the `DisplayManager` from a `com.android.shell`
  * package context so the call passes `DisplayManagerService`'s package/uid check.
  */
+@Keep
 class PrivilegedServer() : IPrivilegedService.Stub() {
+    private val destroying = AtomicBoolean(false)
+
+    override fun getProtocolVersion(): Int = PrivilegedProtocol.VERSION
+
+    override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+        if (destroying.get() && code != IBinder.INTERFACE_TRANSACTION &&
+            code != IBinder.FIRST_CALL_TRANSACTION + 16777114 && code != IBinder.FIRST_CALL_TRANSACTION + 1) {
+            throw android.os.DeadObjectException()
+        }
+        return super.onTransact(code, data, reply, flags)
+    }
 
     /** A Context — Shizuku-provided in the user-service path, system-context in [main]. */
     private var context: Context? = null
@@ -91,11 +105,17 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
     }
 
     override fun destroy() {
-        synchronized(sessionImeLock) { restoreSessionImeInternal("helper shutdown") }
-        phoneFocusHandler.removeCallbacksAndMessages(null)
-        setBeastMediaRoutingEnabled(false)
-        nativeMouse?.close()
-        releaseAllDisplays()
+        if (!destroying.compareAndSet(false, true)) return
+        fun cleanup(name: String, action: () -> Unit) {
+            runCatching(action).onFailure { Log.w(TAG, "Shutdown cleanup failed: $name", it) }
+        }
+        cleanup("input monitor") { setHotkeyListener(null) }
+        cleanup("focus callbacks") { phoneFocusHandler.removeCallbacksAndMessages(null) }
+        cleanup("touch guard") { clearPhoneTouchGuard() }
+        cleanup("session IME") { synchronized(sessionImeLock) { restoreSessionImeInternal("helper shutdown") } }
+        cleanup("legacy audio route") { setBeastMediaRoutingEnabled(false) }
+        cleanup("native input") { nativeMouse?.close(); nativeMouse = null }
+        cleanup("virtual displays") { releaseAllDisplays() }
         exitProcess(0)
     }
 
@@ -130,6 +150,7 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         surface: Surface,
         destroyContentOnRemoval: Boolean,
     ): Int {
+        if (destroying.get()) return -1
         val displayManager = displayManager()
         if (displayManager == null) {
             Log.e(TAG, "createVirtualDisplay: no DisplayManager (context unavailable)")
@@ -155,7 +176,10 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
                 Log.e(TAG, "trusted virtual display rejected: phone IME routing unavailable id=$id")
                 return IME_ROUTING_UNAVAILABLE
             }
-            synchronized(virtualDisplays) { virtualDisplays[id] = display }
+            synchronized(virtualDisplays) {
+                if (destroying.get()) { display.release(); return -1 }
+                virtualDisplays[id] = display
+            }
             Log.i(TAG, "trusted virtual display created id=$id ${width}x$height '$name' ime=fallback")
             id
         } catch (e: Exception) {
@@ -2496,7 +2520,16 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
                     }, "usb-shell-lifeline").apply { isDaemon = true; start() }
                 }
                 if (usbToken == null) {
-                    sendBinderToApp(server, startupAttempt = startupAttempt)
+                    val offer = java.util.concurrent.FutureTask { sendBinderToApp(server, startupAttempt = startupAttempt) }
+                    Thread(offer, "adb-owner-offer").apply { isDaemon = true; start() }
+                    val reply = offer.get(15, java.util.concurrent.TimeUnit.SECONDS)
+                    check(reply?.getBoolean(BinderReceiverProvider.EXTRA_ACCEPTED) == true) { "ADB ownership rejected" }
+                    val owner = checkNotNull(reply.getBinder(BinderReceiverProvider.EXTRA_OWNER))
+                    val death = IBinder.DeathRecipient { server.exit() }
+                    owner.linkToDeath(death, 0)
+                    check(owner.pingBinder()) { "ADB owner died during handoff" }
+                    usbOwner = owner
+                    usbOwnerDeath = death
                 } else {
                     if (usbMode.detached) {
                         Thread({
@@ -2633,6 +2666,9 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
          */
         private var usbOwner: IBinder? = null
         private var usbOwnerDeath: IBinder.DeathRecipient? = null
+
+        private fun sendBinderToApp(binder: IBinder, usbToken: String?): Bundle? =
+            sendBinderToApp(binder, usbToken, null)
 
         private fun sendBinderToApp(
             binder: IBinder,
