@@ -147,6 +147,14 @@ object PrivilegedService {
         DISCOVERING,
         CONNECTING,
         STARTING,
+        STOPPING,
+        STOPPED,
+        SHIZUKU_NOT_INSTALLED,
+        SHIZUKU_NOT_RUNNING,
+        AUTHORIZATION_REQUIRED,
+        AUTHORIZATION_DENIED,
+        CONNECTION_LOST,
+        START_TIMEOUT,
 
         /** Helper bound — privileged calls go through. */
         READY,
@@ -169,6 +177,16 @@ object PrivilegedService {
 
     private var appContext: Context? = null
     @Volatile private var adbBackend: AdbPrivilegeBackend? = null
+    @Volatile private var shizukuBackend: ShizukuPrivilegeBackend? = null
+    @Volatile var selectedBackend = PrivilegeBackendId.WIRELESS_ADB
+        private set
+    @Volatile var unavailableReason: UnavailableReason? = null
+        private set
+    @Volatile private var intentionallyStopped = false
+    private fun selectedActivationBackend(): PrivilegeBackend? = when (selectedBackend) {
+        PrivilegeBackendId.SHIZUKU -> shizukuBackend
+        PrivilegeBackendId.WIRELESS_ADB -> adbBackend
+    }
     private val backendAttemptIds = AtomicLong(0)
     @Volatile private var activeBackendAttempt = 0L
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
@@ -192,8 +210,11 @@ object PrivilegedService {
 
     /** Call once, from the Application. Computes the initial state from persisted identity. */
     fun init(context: Context) {
+        if (appContext != null) return
         appContext = context.applicationContext
+        selectedBackend = PrivilegePreferences.selected(context)
         adbBackend = AdbPrivilegeBackend(context.applicationContext)
+        shizukuBackend = ShizukuPrivilegeBackend(context.applicationContext)
         // USB provider admission and READY publication are serialized on this worker too.
         // Queue initialization behind any admission already accepted before Application.onCreate.
         worker.execute {
@@ -208,17 +229,16 @@ object PrivilegedService {
     }
 
     fun addListener(listener: () -> Unit) = listeners.add(listener)
-    private val adbBackendCallback = object : PrivilegeBackend.Callback {
+    private fun backendCallback(backend: PrivilegeBackendId) = object : PrivilegeBackend.Callback {
         override fun onConnecting(attemptId: Long) {
             worker.execute {
-                if (attemptId == activeBackendAttempt) setState(State.DISCOVERING)
+                if (attemptId == activeBackendAttempt && selectedBackend == backend) setState(State.DISCOVERING)
             }
         }
 
         override fun onConnected(attemptId: Long, binder: IBinder) {
             worker.execute {
-                if (attemptId != activeBackendAttempt) {
-                    if (service?.asBinder() != binder) runCatching { IPrivilegedService.Stub.asInterface(binder).exit() }
+                if (attemptId != activeBackendAttempt || selectedBackend != backend || intentionallyStopped) {
                     return@execute
                 }
                 setState(State.STARTING)
@@ -228,11 +248,19 @@ object PrivilegedService {
 
         override fun onUnavailable(attemptId: Long, reason: UnavailableReason) {
             worker.execute {
-                if (attemptId != activeBackendAttempt) return@execute
+                if (attemptId != activeBackendAttempt || selectedBackend != backend || intentionallyStopped) return@execute
+                unavailableReason = reason
+                if (reason == UnavailableReason.CONNECTION_LOST) serviceDeath?.binderDied()
                 setState(when (reason) {
                     UnavailableReason.DEVELOPER_OPTIONS_REQUIRED -> State.NEEDS_DEVELOPER_OPTIONS
                     UnavailableReason.PAIRING_REQUIRED -> State.NEEDS_PAIRING
                     UnavailableReason.INCOMPATIBLE_RUNTIME -> State.UNSUPPORTED
+                    UnavailableReason.SHIZUKU_NOT_INSTALLED -> State.SHIZUKU_NOT_INSTALLED
+                    UnavailableReason.SHIZUKU_NOT_RUNNING -> State.SHIZUKU_NOT_RUNNING
+                    UnavailableReason.AUTHORIZATION_REQUIRED -> State.AUTHORIZATION_REQUIRED
+                    UnavailableReason.AUTHORIZATION_DENIED -> State.AUTHORIZATION_DENIED
+                    UnavailableReason.CONNECTION_LOST -> State.CONNECTION_LOST
+                    UnavailableReason.START_TIMEOUT -> State.START_TIMEOUT
                     else -> State.NEEDS_WIRELESS_DEBUGGING
                 })
             }
@@ -276,14 +304,15 @@ object PrivilegedService {
     /** Start the selected activation backend. */
     fun ensureRunning() {
         worker.execute {
+            if (intentionallyStopped || state == State.STOPPING) return@execute
             if (usbAttempt?.valid() == true) return@execute
             if (state == State.READY && service != null) return@execute
             if (state == State.DISCOVERING || state == State.CONNECTING || state == State.STARTING) return@execute
-            val backend = adbBackend ?: return@execute
+            val backend = selectedActivationBackend() ?: return@execute
             val attemptId = backendAttemptIds.incrementAndGet()
             activeBackendAttempt = attemptId
             setState(State.DISCOVERING)
-            backend.start(attemptId, adbBackendCallback)
+            backend.start(attemptId, backendCallback(backend.id))
         }
     }
 
@@ -295,11 +324,64 @@ object PrivilegedService {
      * backgrounding it). [done] runs on the worker thread.
      */
     fun activate(pairingCode: String, done: (Boolean) -> Unit) {
+        if (selectedBackend != PrivilegeBackendId.WIRELESS_ADB) { done(false); return }
         val backend = adbBackend
         if (backend == null) { done(false); return }
         backend.activate(pairingCode) { paired ->
-            done(paired)
-            if (paired) ensureRunning()
+            val accepted = paired && selectedBackend == PrivilegeBackendId.WIRELESS_ADB
+            done(accepted)
+            if (accepted) ensureRunning()
+        }
+    }
+
+    fun requestShizukuAuthorization() {
+        if (selectedBackend == PrivilegeBackendId.SHIZUKU) shizukuBackend?.requestAuthorization()
+    }
+
+    fun retryHelper() {
+        worker.execute { intentionallyStopped = false; ensureRunning() }
+    }
+
+    fun selectBackend(next: PrivilegeBackendId, done: (Result<Unit>) -> Unit = {}) =
+        stopOrSwitch(next, restart = true, done)
+
+    fun restartHelper(done: (Result<Unit>) -> Unit = {}) = stopOrSwitch(selectedBackend, true, done)
+    fun stopHelper(done: (Result<Unit>) -> Unit = {}) = stopOrSwitch(selectedBackend, false, done)
+
+    private fun stopOrSwitch(next: PrivilegeBackendId, restart: Boolean, done: (Result<Unit>) -> Unit) {
+        worker.execute {
+            if (state == State.STOPPING) { mainHandler.post { done(Result.failure(IllegalStateException("Helper is stopping"))) }; return@execute }
+            intentionallyStopped = true
+            activeBackendAttempt = backendAttemptIds.incrementAndGet()
+            setState(State.STOPPING)
+            val current = service
+            val finish: (Result<Unit>) -> Unit = { outcome -> worker.execute {
+                if (outcome.isSuccess) {
+                    current?.let { helper -> serviceDeath?.let { runCatching { helper.asBinder().unlinkToDeath(it, 0) } } }
+                    service = null
+                    serviceDeath = null
+                    serviceGeneration++
+                    usbLease?.attempt?.cancel()
+                    usbLease = null
+                    acceptedTransport = BridgeTransport.NONE
+                    pendingPinch.set(null)
+                    selectedBackend = next
+                    appContext?.let { PrivilegePreferences.select(it, next) }
+                    unavailableReason = null
+                    setState(State.STOPPED)
+                    intentionallyStopped = !restart
+                    if (restart) ensureRunning()
+                } else {
+                    intentionallyStopped = false
+                    setState(if (current?.asBinder()?.pingBinder() == true) State.READY else State.CONNECTION_LOST)
+                }
+                mainHandler.post { done(outcome) }
+            } }
+            val backend = selectedActivationBackend()
+            if (acceptedTransport == BridgeTransport.USB) {
+                val result = runCatching { HelperShutdown.awaitDeath(current?.asBinder()) { current?.exit() } }
+                if (result.isFailure) finish(result) else backend?.stop(finish) ?: finish(Result.success(Unit))
+            } else backend?.stop(finish) ?: finish(Result.success(Unit))
         }
     }
 
@@ -313,7 +395,7 @@ object PrivilegedService {
     private class UsbLease(val attempt: UsbBootstrapAttempt, val binder: IBinder,
         val generation: Long, val owner: IBinder = Binder())
     @Volatile private var usbLease: UsbLease? = null
-    enum class BridgeTransport { NONE, USB, WIRELESS }
+    enum class BridgeTransport { NONE, USB, WIRELESS, SHIZUKU }
     @Volatile private var acceptedTransport: BridgeTransport = BridgeTransport.NONE
     fun bridgeTransport(): BridgeTransport {
         if (!isBridgeReady()) return BridgeTransport.NONE
@@ -392,8 +474,8 @@ object PrivilegedService {
                     serviceGeneration++
                     runCatching { IPrivilegedService.Stub.asInterface(lease.binder).exit() }
                     setImeRoutingState(ImeRoutingState.UNAVAILABLE)
-                    setState(State.NEEDS_WIRELESS_DEBUGGING)
-                    ensureRunning()
+                    setState(State.CONNECTION_LOST)
+                    if (!intentionallyStopped && selectedBackend == PrivilegeBackendId.WIRELESS_ADB) ensureRunning()
                 }
             }
             if (usbAttempt !== attempt) return@execute
@@ -518,7 +600,7 @@ object PrivilegedService {
         val previousDeath = serviceDeath
         val publish: () -> Unit = {
             service = IPrivilegedService.Stub.asInterface(binder)
-            acceptedTransport = if (usbToken != null) BridgeTransport.USB else BridgeTransport.WIRELESS
+            acceptedTransport = if (usbToken != null) BridgeTransport.USB else if (selectedBackend == PrivilegeBackendId.SHIZUKU) BridgeTransport.SHIZUKU else BridgeTransport.WIRELESS
             serviceGeneration = generation
             serviceDeath = death
             if (usbToken != null) {

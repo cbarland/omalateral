@@ -55,7 +55,7 @@ android {
     defaultConfig {
         minSdk = 26
         targetSdk = 37
-        versionCode = 6
+        versionCode = 7
         versionName = "0.2.11"
         buildConfigField("boolean", "VITURE_SDK_ENABLED", vitureSdkEnabled.toString())
 
@@ -107,6 +107,8 @@ dependencies {
     implementation(libs.libadb.android)
     implementation(libs.conscrypt.android)
     implementation(libs.sun.security.android)
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

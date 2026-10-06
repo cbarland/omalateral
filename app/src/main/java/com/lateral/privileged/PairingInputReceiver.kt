@@ -18,6 +18,7 @@ class PairingInputReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != PairingNotifier.ACTION_SUBMIT_CODE) return
+        if (PrivilegedService.selectedBackend != PrivilegeBackendId.WIRELESS_ADB) return
         val results = RemoteInput.getResultsFromIntent(intent)
         val raw = results?.getCharSequence(PairingNotifier.KEY_PAIRING_CODE)?.toString().orEmpty()
         val code = raw.filter(Char::isDigit).take(6)
@@ -28,7 +29,7 @@ class PairingInputReceiver : BroadcastReceiver() {
             Log.i(TAG, "pair from notification ok=$ok")
             if (ok) {
                 PairingNotifier.cancel(context)
-            } else {
+            } else if (PrivilegedService.selectedBackend == PrivilegeBackendId.WIRELESS_ADB) {
                 PairingNotifier.showPairingPrompt(context)
             }
             pendingResult.finish()

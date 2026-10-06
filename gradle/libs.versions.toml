@@ -6,6 +6,7 @@ appcompat = "1.7.0"
 libadb = "3.1.1"
 conscrypt = "2.5.3"
 sunSecurity = "1.1"
+shizuku = "13.1.5"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -14,6 +15,8 @@ androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version
 libadb-android = { module = "com.github.MuntashirAkon:libadb-android", version.ref = "libadb" }
 conscrypt-android = { module = "org.conscrypt:conscrypt-android", version.ref = "conscrypt" }
 sun-security-android = { module = "com.github.MuntashirAkon:sun-security-android", version.ref = "sunSecurity" }
+shizuku-api = { module = "dev.rikka.shizuku:api", version.ref = "shizuku" }
+shizuku-provider = { module = "dev.rikka.shizuku:provider", version.ref = "shizuku" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
