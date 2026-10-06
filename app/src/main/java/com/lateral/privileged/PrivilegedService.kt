@@ -11,14 +11,12 @@ import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
 import android.view.Surface
-import io.github.muntashirakon.adb.AdbPairingRequiredException
-import io.github.muntashirakon.adb.AdbStream
-import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -169,11 +167,10 @@ object PrivilegedService {
     @Volatile
     private var service: IPrivilegedService? = null
 
-    /** Held to keep the helper alive — closing the stream brings the server down with it. */
-    @Volatile
-    private var adbStream: AdbStream? = null
-
     private var appContext: Context? = null
+    @Volatile private var adbBackend: AdbPrivilegeBackend? = null
+    private val backendAttemptIds = AtomicLong(0)
+    @Volatile private var activeBackendAttempt = 0L
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
     private val worker = Executors.newSingleThreadExecutor { Thread(it, "lateral-privileged") }
     /** Pinch pacing must never occupy the lane used by clicks, keys, and task actions. */
@@ -196,6 +193,7 @@ object PrivilegedService {
     /** Call once, from the Application. Computes the initial state from persisted identity. */
     fun init(context: Context) {
         appContext = context.applicationContext
+        adbBackend = AdbPrivilegeBackend(context.applicationContext)
         // USB provider admission and READY publication are serialized on this worker too.
         // Queue initialization behind any admission already accepted before Application.onCreate.
         worker.execute {
@@ -204,12 +202,42 @@ object PrivilegedService {
                 it.binder == service?.asBinder() && !it.attempt.cancelled &&
                     it.attempt.ready.getNow(false) == true && it.binder.pingBinder()
             } == true
-            if (!isBridgeReady() && !usbInProgress && !usbReady) state = computeInitialState(context.applicationContext)
+            if (!isBridgeReady() && !usbInProgress && !usbReady) state = State.NEEDS_PAIRING
             notifyListeners()
         }
     }
 
     fun addListener(listener: () -> Unit) = listeners.add(listener)
+    private val adbBackendCallback = object : PrivilegeBackend.Callback {
+        override fun onConnecting(attemptId: Long) {
+            worker.execute {
+                if (attemptId == activeBackendAttempt) setState(State.DISCOVERING)
+            }
+        }
+
+        override fun onConnected(attemptId: Long, binder: IBinder) {
+            worker.execute {
+                if (attemptId != activeBackendAttempt) {
+                    if (service?.asBinder() != binder) runCatching { IPrivilegedService.Stub.asInterface(binder).exit() }
+                    return@execute
+                }
+                setState(State.STARTING)
+                onBinderOnWorker(binder, null)
+            }
+        }
+
+        override fun onUnavailable(attemptId: Long, reason: UnavailableReason) {
+            worker.execute {
+                if (attemptId != activeBackendAttempt) return@execute
+                setState(when (reason) {
+                    UnavailableReason.DEVELOPER_OPTIONS_REQUIRED -> State.NEEDS_DEVELOPER_OPTIONS
+                    UnavailableReason.PAIRING_REQUIRED -> State.NEEDS_PAIRING
+                    UnavailableReason.INCOMPATIBLE_RUNTIME -> State.UNSUPPORTED
+                    else -> State.NEEDS_WIRELESS_DEBUGGING
+                })
+            }
+        }
+    }
     @Volatile private var navigationObserverReady = false
     fun setPhoneNavigationObserverReady(ready: Boolean) {
         navigationObserverReady = ready
@@ -226,40 +254,6 @@ object PrivilegedService {
     fun isBridgeReady(): Boolean = state == State.READY &&
         runCatching { service?.asBinder()?.pingBinder() == true }.getOrDefault(false)
     fun removeListener(listener: () -> Unit) = listeners.remove(listener)
-
-    private fun computeInitialState(context: Context): State = when {
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.R -> State.UNSUPPORTED
-        !isDevOptionsEnabled(context) -> State.NEEDS_DEVELOPER_OPTIONS
-        hasPaired(context) -> State.NEEDS_WIRELESS_DEBUGGING
-        else -> State.NEEDS_PAIRING
-    }
-
-    /** Developer options unlocked? Read-only access to Settings.Global; no permission needed. */
-    private fun isDevOptionsEnabled(context: Context): Boolean = runCatching {
-        Settings.Global.getInt(
-            context.contentResolver,
-            Settings.Global.DEVELOPMENT_SETTINGS_ENABLED,
-            0,
-        ) != 0
-    }.getOrDefault(false)
-
-    /**
-     * Whether UxSpace has previously paired successfully. A separate marker file from the key
-     * — the key is generated and persisted on first use of [AdbConnectionManager], whether or
-     * not the device ever accepted it, so the key file's existence proves nothing.
-     */
-    private fun hasPaired(context: Context): Boolean =
-        File(context.filesDir, PAIRED_MARKER).exists()
-
-    private fun markPaired(context: Context, paired: Boolean) {
-        val marker = File(context.filesDir, PAIRED_MARKER)
-        if (paired) {
-            marker.parentFile?.mkdirs()
-            runCatching { marker.createNewFile() }
-        } else {
-            runCatching { marker.delete() }
-        }
-    }
 
     private fun setState(next: State) {
         if (next == state) return
@@ -279,100 +273,17 @@ object PrivilegedService {
         listeners.forEach { runCatching { it() } }
     }
 
-    /**
-     * Try to make the helper live — discover the connect port via mDNS, connect, start the
-     * server. Idempotent; safe to call from anywhere. The state machine reflects progress.
-     */
+    /** Start the selected activation backend. */
     fun ensureRunning() {
         worker.execute {
             if (usbAttempt?.valid() == true) return@execute
-            val ctx = appContext ?: return@execute
-            if (state == State.UNSUPPORTED) return@execute
             if (state == State.READY && service != null) return@execute
-            // Bring-up already in flight: a previous ensureRunning() task is spawning
-            // a server and its binder hasn't published yet. Without this guard, every
-            // call between the spawn and the READY transition fires another server,
-            // and each one runs its own /dev/input/event* HotkeyMonitor — observed in
-            // logcat as three identical "hotkey monitor started" lines and 3× FD use
-            // on every input device. The dropped binders are leaked; the displaced
-            // server processes never exit.
-            if (state == State.DISCOVERING ||
-                state == State.CONNECTING ||
-                state == State.STARTING
-            ) {
-                Log.d(TAG, "ensureRunning ignored — bring-up already in flight (state=$state)")
-                return@execute
-            }
-            // Re-evaluate prerequisites on every attempt — the user may have just unlocked
-            // Developer options or toggled Wireless Debugging.
-            if (!isDevOptionsEnabled(ctx)) {
-                setState(State.NEEDS_DEVELOPER_OPTIONS)
-                return@execute
-            }
-            if (!hasPaired(ctx)) {
-                setState(State.NEEDS_PAIRING)
-                return@execute
-            }
-
+            if (state == State.DISCOVERING || state == State.CONNECTING || state == State.STARTING) return@execute
+            val backend = adbBackend ?: return@execute
+            val attemptId = backendAttemptIds.incrementAndGet()
+            activeBackendAttempt = attemptId
             setState(State.DISCOVERING)
-            val endpoints = AdbDiscovery.discoverConnect(ctx, DISCOVERY_TIMEOUT_MS)
-            if (endpoints.isEmpty()) {
-                Log.w(TAG, "connect service not advertised — wireless debugging off?")
-                setState(State.NEEDS_WIRELESS_DEBUGGING)
-                return@execute
-            }
-
-            val adb = AdbConnectionManager.getInstance(ctx)
-            if (!adb.isConnected) {
-                setState(State.CONNECTING)
-                // Android can advertise a stale `_adb-tls-connect._tcp` next to the active
-                // one; try each until one accepts the connect, so a refused stale endpoint
-                // doesn't masquerade as "wireless debugging off".
-                var connected = false
-                var lastError: Exception? = null
-                for (endpoint in endpoints) {
-                    try {
-                        if (adb.connect(endpoint.host, endpoint.port)) {
-                            connected = true
-                            break
-                        }
-                        Log.w(TAG, "ADB connect to ${endpoint.host}:${endpoint.port} returned false")
-                    } catch (e: AdbPairingRequiredException) {
-                        // The device no longer trusts our key — wipe the marker and walk
-                        // the user back through pairing. No point trying other endpoints.
-                        Log.w(TAG, "device requires (re-)pairing — invalidating the paired marker")
-                        markPaired(ctx, false)
-                        setState(State.NEEDS_PAIRING)
-                        return@execute
-                    } catch (e: Exception) {
-                        lastError = e
-                        Log.w(
-                            TAG,
-                            "ADB connect to ${endpoint.host}:${endpoint.port} failed: ${e.message}",
-                        )
-                    }
-                }
-                if (!connected) {
-                    Log.e(
-                        TAG,
-                        "all ${endpoints.size} connect endpoint(s) refused — wireless debugging off?",
-                        lastError,
-                    )
-                    setState(State.NEEDS_WIRELESS_DEBUGGING)
-                    return@execute
-                }
-            }
-
-            setState(State.STARTING)
-            val stream = ServerBootstrap.start(ctx, adb)
-            if (stream == null) {
-                Log.w(TAG, "could not start PrivilegedServer over ADB")
-                setState(State.NEEDS_WIRELESS_DEBUGGING)
-                return@execute
-            }
-            adbStream = stream
-            // BinderReceiverProvider.onPrivilegedBinder() drives us to READY when the server
-            // publishes its Binder back to the app.
+            backend.start(attemptId, adbBackendCallback)
         }
     }
 
@@ -384,27 +295,11 @@ object PrivilegedService {
      * backgrounding it). [done] runs on the worker thread.
      */
     fun activate(pairingCode: String, done: (Boolean) -> Unit) {
-        worker.execute {
-            val ctx = appContext ?: run { done(false); return@execute }
-            try {
-                val endpoint = AdbDiscovery.discoverPairing(ctx, DISCOVERY_TIMEOUT_MS)
-                if (endpoint == null) {
-                    Log.w(TAG, "pair: mDNS did not find the service — is the dialog still up?")
-                    markPaired(ctx, false)
-                    done(false); return@execute
-                }
-                val adb = AdbConnectionManager.getInstance(ctx)
-                val paired = adb.pair(endpoint.host, endpoint.port, pairingCode)
-                Log.i(TAG, "ADB pair ${endpoint.host}:${endpoint.port} ok=$paired")
-                markPaired(ctx, paired)
-                if (!paired) { done(false); return@execute }
-                done(true)
-                ensureRunning()
-            } catch (e: Exception) {
-                Log.e(TAG, "activate failed", e)
-                markPaired(ctx, false)
-                done(false)
-            }
+        val backend = adbBackend
+        if (backend == null) { done(false); return }
+        backend.activate(pairingCode) { paired ->
+            done(paired)
+            if (paired) ensureRunning()
         }
     }
 
@@ -530,6 +425,10 @@ object PrivilegedService {
         runCatching { IPrivilegedService.Stub.asInterface(binder).exit() }
     }
 
+    internal fun offerAdbBinder(binder: IBinder, attemptId: Long) {
+        adbBackend?.offerBinder(attemptId, binder)
+    }
+
     fun onPrivilegedBinder(binder: IBinder, usbToken: String? = null) {
         worker.execute { onBinderOnWorker(binder, usbToken) }
     }
@@ -571,6 +470,7 @@ object PrivilegedService {
     }
 
     private fun onBinderOnWorker(binder: IBinder, usbToken: String?) {
+        if (service?.asBinder() == binder && binder.pingBinder()) return
         val attempt = usbAttempt
         when (BinderOfferPolicy.decide(service?.asBinder(), service?.asBinder()?.pingBinder() == true,
             usbCandidate, binder, usbToken, attempt, usbShellAccepted)) {
@@ -596,8 +496,7 @@ object PrivilegedService {
                     acceptedTransport = BridgeTransport.NONE
                     serviceDeath = null
                     serviceGeneration++
-                    runCatching { adbStream?.close() }
-                    adbStream = null
+                    adbBackend?.helperLost(binder)
                     setImeRoutingState(ImeRoutingState.UNAVAILABLE)
                     setState(State.NEEDS_WIRELESS_DEBUGGING)
                     ensureRunning()

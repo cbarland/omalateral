@@ -2476,9 +2476,12 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
             val processStartNanos = System.nanoTime()
             try {
                 Log.i(TAG, "PrivilegedServer.main entered, pid=${android.os.Process.myPid()}")
-                val usbMode = UsbLifeline.mode(args)
+                val startup = AdbStartupArgs.parse(args)
+                val startupAttempt = startup?.attemptId
+                val adbProcessName = startup?.processName ?: "lateral_privileged"
+                val usbMode = UsbLifeline.mode(if (startup != null) emptyArray() else args)
                 val usbToken = usbMode.token
-                if (usbToken == null && canSweepOrphanHelpers()) killOrphanPrivilegedServers()
+                if (usbToken == null && canSweepOrphanHelpers()) killOrphanPrivilegedServers(adbProcessName)
                 Log.i(TAG, "orphan sweep returned; preparing Looper")
                 Looper.prepareMainLooper()
                 val systemContext = obtainSystemContext()
@@ -2493,7 +2496,7 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
                     }, "usb-shell-lifeline").apply { isDaemon = true; start() }
                 }
                 if (usbToken == null) {
-                    sendBinderToApp(server)
+                    sendBinderToApp(server, startupAttempt = startupAttempt)
                 } else {
                     if (usbMode.detached) {
                         Thread({
@@ -2562,7 +2565,7 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
          * processes, so `Process.killProcess` does what we need; the SIGKILL on
          * our SDK handle / Binder is handled by Android's process teardown.
          */
-        private fun killOrphanPrivilegedServers() {
+        private fun killOrphanPrivilegedServers(expectedProcessName: String) {
             val self = android.os.Process.myPid()
             Log.i(TAG, "orphan sweep starting (self pid=$self)")
             val procRoot = File("/proc")
@@ -2586,7 +2589,7 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
                     // command string, and killing that shell tore down the ADB stream
                     // the app reads the privileged binder over.
                     val argv0 = cmdline.substringBefore('\u0000')
-                    if (argv0 != "lateral_privileged") continue
+                    if (argv0 != expectedProcessName) continue
                     Log.i(TAG, "killing orphan lateral_privileged pid=$pid")
                     runCatching { android.os.Process.killProcess(pid) }
                     killed++
@@ -2631,10 +2634,15 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         private var usbOwner: IBinder? = null
         private var usbOwnerDeath: IBinder.DeathRecipient? = null
 
-        private fun sendBinderToApp(binder: IBinder, usbToken: String? = null): Bundle? {
+        private fun sendBinderToApp(
+            binder: IBinder,
+            usbToken: String? = null,
+            startupAttempt: Long? = null,
+        ): Bundle? {
             val extras = Bundle().apply {
                 putBinder(BinderReceiverProvider.EXTRA_BINDER, binder)
                 if (usbToken != null) putString(BinderReceiverProvider.EXTRA_USB_TOKEN, usbToken)
+                if (startupAttempt != null) putLong(BinderReceiverProvider.EXTRA_STARTUP_ATTEMPT, startupAttempt)
             }
             return callAppProvider(extras, BinderReceiverProvider.METHOD_SET_BINDER)
         }

@@ -66,7 +66,12 @@ class BinderReceiverProvider : ContentProvider() {
         val usbToken = if (extras.containsKey(EXTRA_USB_TOKEN))
             extras.getString(EXTRA_USB_TOKEN) ?: "" else null
         if (usbToken == null) {
-            PrivilegedService.onPrivilegedBinder(binder)
+            val attemptId = extras?.getLong(EXTRA_STARTUP_ATTEMPT, 0L) ?: 0L
+            if (attemptId == 0L) {
+                Log.w(TAG, "rejecting ADB Binder without a startup attempt id")
+                return null
+            }
+            PrivilegedService.offerAdbBinder(binder, attemptId)
             return null
         }
         val reply = PrivilegedService.offerUsbBinder(binder, usbToken)
@@ -110,6 +115,7 @@ class BinderReceiverProvider : ContentProvider() {
         /** Bundle key under which the Binder travels. */
         const val EXTRA_BINDER = "binder"
         const val EXTRA_USB_TOKEN = "usb_token"
+        const val EXTRA_STARTUP_ATTEMPT = "startup_attempt"
         const val EXTRA_ACCEPTED = "usb_accepted"
         const val EXTRA_ERROR = "usb_error"
         const val EXTRA_CAN_SWEEP = "can_sweep_orphans"
