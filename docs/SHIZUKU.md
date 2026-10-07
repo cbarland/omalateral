@@ -98,6 +98,52 @@ were not executed: only an x86_64 emulator was connected, while these APKs
 and the Beast release target use ARM64. Local success does not satisfy the
 physical release gate below.
 
+### Nubia setup validation (2026-10-06)
+
+Installed the stable debug APK (versionCode 7) over the existing installation on
+the Nubia NX789J, Android 15. Selected Shizuku explicitly and authorized LATERAL.
+The local `adb/lateral_paired_v2.flag` was absent throughout; no LATERAL ADB
+pairing was performed. The stable APK SHA-256 was
+`38cfb6229ed1c2075aac55cdbb12327ed45da47cecb1556f899bcdfd08c01aeb`.
+
+`ShizukuSetupAndroidTest` passed both tests on the phone in 11.303 seconds:
+
+- Twenty repeated startup calls retained the same Binder/generation. Explicit
+  restart killed the old Binder and accepted a replacement (generation 1 to 3).
+- With Wi-Fi disabled, six successive one-second checks retained the same
+  Binder, generation 3, trusted display 15, exact Settings task 36594, and
+  verified IME fallback policy. The test restored Wi-Fi and released its display.
+
+Initial runs failed with connection loss/authorization-required states. Two
+`shizuku_server` processes were present. Shizuku's own stop/start flow reported
+and killed the orphaned process, leaving one server; the unchanged APK/test
+then passed. This supports a runtime-state cause for those initial failures,
+without establishing why the duplicate servers originally arose. Normal
+activity leave/reopen preserved its helper, and Shizuku stop/start recovered
+LATERAL without selecting ADB.
+
+The detached on-device runner saved its output despite loss of the PC's wireless
+ADB connection. Android also disabled wireless debugging during the Wi-Fi cycle;
+it had to be reenabled to retrieve the result. Raw results, focused lifecycle
+logs, and startup/UI evidence are in ignored `app/build/reports/nubia-shizuku/`.
+Device logging was temporarily enabled for diagnosis and restored afterward.
+
+These checks cover setup, Binder ownership, hosted task/display continuity, and
+IME display policy. No Beast/glasses display was connected, so physical gesture,
+typing, multiple-workspace-app, and glasses-reconnection acceptance remains
+pending. The test does not claim full hardware release acceptance.
+
+Run this opt-in test only on the prepared physical phone with Shizuku selected,
+already authorized, Wi-Fi enabled, and no LATERAL pairing marker:
+
+```text
+am instrument --user 0 -w -r -e class com.lateral.privileged.ShizukuSetupAndroidTest -e lateral_shizuku_setup true com.lateral.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+Use a detached on-device runner when ADB itself is wireless. Wi-Fi restoration
+runs in `finally` and an independent 45-second watchdog; wireless debugging
+may still need to be reenabled manually after the test.
+
 ### Hardware release gate
 
 On the Nubia/Beast target, start Shizuku and host multiple apps. Turn Wi-Fi
