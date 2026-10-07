@@ -497,6 +497,11 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private var shellMouseDownX = 0f
     private var shellMouseDownY = 0f
     private var shellMouseCancelled = false
+    private var routedLauncherRoot: View? = null
+    private var routedLauncherView: View? = null
+    private var routedLauncherLease: TransientPanelCoordinator.Lease? = null
+    private var routedLauncherButton = 0
+    private var routedLauncherDownAt = 0L
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
@@ -582,6 +587,10 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun findBeastHoverTarget(view: View, screenX: Int, screenY: Int): View? {
+        // A modal overlay is a hit-test barrier, even where it has no hover control.
+        if (view === root && ::launcher.isInitialized && launcher.visibility == View.VISIBLE) {
+            return findBeastHoverTarget(launcher, screenX, screenY)
+        }
         if (view.visibility != View.VISIBLE || view.alpha <= 0f || !view.isShown) return null
         val bounds = Rect()
         if (!view.getGlobalVisibleRect(bounds) || !bounds.contains(screenX, screenY)) return null
@@ -595,18 +604,32 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     override fun routeAppScroll(displayId: Int, x: Int, y: Int, amount: Float): Boolean {
         if (display?.displayId != displayId) return false
+        if (launcher.visibility == View.VISIBLE) {
+            scrollWorkspace(amount * InputSettings.scrollSensitivity)
+            return true
+        }
         if (TransientPanelCoordinator.isActiveOnDisplay(displayId)) return false
         return cards.values.toList().asReversed().any { it.routeScrollAt(x, y, amount) }
     }
 
     override fun routeAppPinch(displayId: Int, x: Int, y: Int, scale: Float): Boolean {
         if (display?.displayId != displayId) return false
+        if (launcher.visibility == View.VISIBLE) return true
         if (TransientPanelCoordinator.isActiveOnDisplay(displayId)) return false
         return cards.values.toList().asReversed().any { it.routePinchAt(x, y, scale) }
     }
 
     override fun routeAppClick(displayId: Int, x: Int, y: Int, button: Int): Boolean {
         if (display?.displayId != displayId) return false
+        if (launcher.visibility == View.VISIBLE) {
+            if (button == MotionEvent.BUTTON_PRIMARY) {
+                val target = root
+                val downAt = SystemClock.uptimeMillis()
+                dispatchLauncherTouch(target, x, y, MotionEvent.ACTION_DOWN, downAt)
+                dispatchLauncherTouch(target, x, y, MotionEvent.ACTION_UP, downAt)
+            }
+            return true
+        }
         if (TransientPanelCoordinator.isActiveOnDisplay(displayId)) return false
         // Fullscreen puts the hosted TextureView over the entire Beast window. Intercept
         // clicks on the shell-owned exit affordance before the app-routing fast path.
@@ -626,6 +649,40 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         buttonState: Int,
     ): Boolean {
         if (display?.displayId != displayId) return false
+        routedLauncherRoot?.let { target ->
+            // Consume the captured stream even if dismissal/rebuilding removes the view.
+            if (routedLauncherButton == MotionEvent.BUTTON_PRIMARY) {
+                if (target === root && routedLauncherView === launcher &&
+                    routedLauncherLease === launcherLease && launcher.visibility == View.VISIBLE) {
+                    dispatchLauncherTouch(target, x, y, action, routedLauncherDownAt)
+                } else {
+                    dispatchLauncherTouch(target, x, y, MotionEvent.ACTION_CANCEL, routedLauncherDownAt)
+                }
+            }
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                routedLauncherRoot = null
+                routedLauncherView = null
+                routedLauncherLease = null
+                routedLauncherButton = 0
+            }
+            return true
+        }
+        if (launcher.visibility == View.VISIBLE) {
+            if (action == MotionEvent.ACTION_DOWN) {
+                routedPointerCard?.cancelRoutedPointer()
+                routedPointerCard = null
+                routedFullscreenExitPointer = false
+                routedLauncherRoot = root
+                routedLauncherView = launcher
+                routedLauncherLease = launcherLease
+                routedLauncherButton = button
+                routedLauncherDownAt = SystemClock.uptimeMillis()
+                if (button == MotionEvent.BUTTON_PRIMARY) {
+                    dispatchLauncherTouch(root, x, y, action, routedLauncherDownAt)
+                }
+            }
+            return true
+        }
         if (TransientPanelCoordinator.isActiveOnDisplay(displayId)) return false
         if (action == MotionEvent.ACTION_DOWN) {
             routedPointerCard?.cancelRoutedPointer()
@@ -661,6 +718,24 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             routedPointerButton = 0
         }
         return true
+    }
+
+    /** PhoneUI owns window focus while searching; the launcher still owns its gestures. */
+    private fun dispatchLauncherTouch(target: View, x: Int, y: Int, action: Int, downAt: Long) {
+        val location = IntArray(2)
+        target.getLocationOnScreen(location)
+        val event = MotionEvent.obtain(
+            downAt, SystemClock.uptimeMillis(), action,
+            (x - location[0]).toFloat(), (y - location[1]).toFloat(), 0,
+        )
+        event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+        try {
+            // Dispatch through the root so Android applies aspectLayer's inverse transform
+            // and preserves the launcher's normal click/drag/ScrollView semantics.
+            target.dispatchTouchEvent(event)
+        } finally {
+            event.recycle()
+        }
     }
 
     private fun fullscreenExitForFocusedTask(): TextView? {
@@ -1600,6 +1675,9 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun showLauncher() {
+        // Repeated intents and appearance rebuilds must not close our own search session.
+        launcherLease?.release()
+        launcherLease = null
         if (!LauncherSearchSession.active && !phoneViewSession) {
             launcherSubmitSequence = LauncherSearchSession.submitSequence
             LauncherSearchSession.begin()
@@ -1661,9 +1739,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun restoreWorkspaceFocus() {
-        launcher.visibility = View.GONE
-        LauncherSearchSession.close()
-        root.requestFocus()
+        hideLauncher()
         renderWorkspace()
         root.post {
             cards[WorkspaceState.focusedTaskId]?.restoreFocus()

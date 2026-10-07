@@ -161,6 +161,50 @@ operation. Physical target verification remains a release requirement.
 
 ## Recovery audit and corrected implementation process
 
+### Beast launcher dismissal regression (2026-10-06)
+
+The reported +APPS failure was intermittent on Nubia. A direct ADB mouse click
+closed the menu, while a phone-touchpad outside click and phone-focused Escape
+left it open. InputDispatcher reported no focused Beast window during that
+reproduction. The launcher returned phone gestures to privileged Android input
+injection instead of dispatching them to its own views. PhoneUI had no shared
+launcher Escape/Back handling. Mouse hover hit-testing could also select toolbar
+controls behind the overlay, and repeated opens reclaimed the launcher's own
+modal lease, closing its shared search session.
+
+The correction routes launcher clicks, pointer streams, scroll, and pinch
+ownership through the existing BeastInputRouter. Root view dispatch retains
+Android's view transforms and scrolling; captured streams cannot reach a
+replacement menu or workspace task. Hover hit-testing stops at the overlay.
+PhoneUI closes search on Escape/Back and exposes its existing Done control.
+Repeated opens preserve search, and restoring workspace focus releases the
+modal lease. Privileged helper operations and Shizuku activation are unchanged.
+
+Emulator verification used API 35 with a 1920x1200 secondary display. The exact
+APK installed on Nubia (SHA-256
+`38cfb6229ed1c2075aac55cdbb12327ed45da47cecb1556f899bcdfd08c01aeb`)
+failed the phone-input-controller dismissal regression. The patched APK passed
+the identical regression and three further runs (about nine seconds each).
+Coverage includes phone trackpad clicks, Close, outside clicks, pointer Down/Up,
+phone Escape and Back, pre-IME Back, the Back dispatcher, covered +APPS hit-testing,
+repeated opens, obsolete pointer cancellation, modal scroll/pinch ownership,
+PhoneUI Done, and workspace-focus cleanup. This is emulator validation; the
+patched APK has not been installed on Nubia for this regression.
+
+The fixture selects Shizuku on the emulator and requires no privileged helper,
+so shell-owned launcher dismissal is verified independently of connectivity.
+Run only on an emulator with the secondary display already configured:
+
+```text
+adb -s emulator-5554 emu multidisplay add 1 1920 1200 160 0
+adb -s emulator-5554 shell am instrument -w -r -e class com.lateral.beast.BeastLauncherDismissAndroidTest com.lateral.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+Builds and raw before/after results are in ignored
+`app/build/reports/beast-launcher-close/`.
+
+### Shizuku implementation recovery
+
 The reference specification described commit `1bff99c`; the recovered checkout
 started at `431d1dc` and already contained USB admission/ownership and AIDL IDs
 48–50. Applying the older specification without reconciling those differences

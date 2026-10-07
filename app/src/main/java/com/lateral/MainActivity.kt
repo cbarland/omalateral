@@ -17,6 +17,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import android.widget.SeekBar
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
@@ -113,6 +114,10 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             if (::beastSearchField.isInitialized) syncBeastSearchField()
         }
     }
+    private val launcherBackCallback = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() = LauncherSearchSession.close()
+    }
+    private var launcherDismissKey: Int? = null
     private val hostedTextInputListener: () -> Unit = {
         runOnUiThread {
             if (!::hostedKeyboardController.isInitialized) return@runOnUiThread
@@ -234,6 +239,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        onBackPressedDispatcher.addCallback(this, launcherBackCallback)
         accessoryController = com.lateral.usb.AccessoryController(this).also { it.start(intent) }
         livePhoneTaskId = taskId
         BeastWorkspaceController.cleanupLegacyTasks(this)
@@ -315,6 +321,19 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
                 }
             }
         }
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val dismissal = event.keyCode == KeyEvent.KEYCODE_ESCAPE || event.keyCode == KeyEvent.KEYCODE_BACK
+        if (dismissal && (LauncherSearchSession.active || launcherDismissKey == event.keyCode)) {
+            if (event.action == KeyEvent.ACTION_DOWN) launcherDismissKey = event.keyCode
+            if (event.action == KeyEvent.ACTION_UP) {
+                launcherDismissKey = null
+                LauncherSearchSession.close()
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onDestroy() {
@@ -1233,6 +1252,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
 
     /** Keeps Beast's query in PhoneUI without placing a modal window over the touchpad. */
     private fun syncBeastSearchField() {
+        launcherBackCallback.isEnabled = LauncherSearchSession.active
         if (!LauncherSearchSession.active) {
             phoneProxyContainer.visibility = View.GONE
             beastSearchField.visibility = View.GONE
@@ -1251,7 +1271,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         }
         phoneProxyContainer.visibility = View.VISIBLE
         beastSearchField.visibility = View.VISIBLE
-        phoneProxyClose.visibility = View.GONE
+        phoneProxyClose.visibility = View.VISIBLE
         val query = LauncherSearchSession.query
         if (beastSearchField.text.toString() != query) {
             beastSearchField.setText(query)
