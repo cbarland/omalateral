@@ -475,6 +475,7 @@ private fun AgentPicker(
                 onDismissRequest = { open = false },
                 properties = PopupProperties(focusable = true),
             ) {
+                DesktopWindow { open = false }
                 Column(
                     Modifier
                         .width(IntrinsicSize.Max)

@@ -18,7 +18,10 @@ Omalauncher's Android desktop. It is not an official Omalauncher or Omarchy rele
 Omalauncher modifications: RuntimeOwner interface for the combined Application;
 Android launch callback for hosted workspace tasks; drawer/shortcut launch routing;
 package-relative file provider; phone-side search submission; a Kotlin 2.2-compatible
-canvas helper. The separate integration manifest retains upstream
+canvas helper; optional desktop-host hooks for dialog/popup cursor overlays and
+phone-owned input connections (including terminal tiles); dialog focus requested
+inside its attached composition. The host hooks default to null in standalone
+Omalauncher. The separate integration manifest retains upstream
 Linux window activities and services but does not register a second home launcher.
 
 PRoot dependencies are downloaded from the exact versions and checksums in

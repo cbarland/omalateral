@@ -2,6 +2,7 @@ package dev.omalauncher.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -37,6 +39,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -46,14 +49,24 @@ private fun DialogFrame(
     onDismiss: () -> Unit,
     content: @Composable () -> Unit,
 ) {
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
+    val hosted = LocalDesktopWindowHost.current != null
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(
+        usePlatformDefaultWidth = !hosted,
+        decorFitsSystemWindows = !hosted,
+    )) {
+        DesktopWindow(onDismiss)
+        Box(
+            if (hosted) Modifier.fillMaxSize().clickable(onClick = onDismiss) else Modifier,
+            contentAlignment = Alignment.Center,
+        ) { Column(
             Modifier
+                .then(if (hosted) Modifier.widthIn(max = 600.dp) else Modifier)
                 .fillMaxWidth()
+                .then(if (hosted) Modifier.clickable { /* Consume the body, not its backdrop. */ } else Modifier)
                 .frame(2.dp, Palette.accent, Palette.surface, radius = 24.dp)
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) { content() }
+        ) { content() } }
     }
 }
 
@@ -68,8 +81,9 @@ internal fun TextDialog(
 ) {
     var text by remember { mutableStateOf(initial) }
     val focus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { focus.requestFocus() }
     DialogFrame(onDismiss) {
+        // Dialog owns a separate composition: request only after its field is attached.
+        LaunchedEffect(Unit) { focus.requestFocus() }
         BasicText(title, style = Mono.copy(fontSize = TextSize.Title))
         hint?.let { BasicText(it, style = Mono.copy(color = Palette.muted)) }
         BasicTextField(

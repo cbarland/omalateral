@@ -123,7 +123,10 @@ class KeyboardBridge(
 class KeyboardSink(
     context: Context,
     private val bridge: KeyboardBridge,
+    private val desktopKeyboard: ((View) -> (() -> Unit))? = null,
 ) : View(context) {
+    private var releaseDesktopKeyboard: (() -> Unit)? = null
+    val keyboardOnDesktopHost get() = desktopKeyboard != null
     /**
      * Only claim to be a text editor while the soft keyboard is wanted. A focused
      * editor makes Android route hardware keys through the keyboard app first,
@@ -146,7 +149,7 @@ class KeyboardSink(
     private val subtypeObserver =
         object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) {
-                if (softKeyboard && cjkKeyboard() != cjk) imm().restartInput(this@KeyboardSink)
+                if (desktopKeyboard == null && softKeyboard && cjkKeyboard() != cjk) imm().restartInput(this@KeyboardSink)
             }
         }
 
@@ -157,6 +160,8 @@ class KeyboardSink(
     }
 
     override fun onDetachedFromWindow() {
+        releaseDesktopKeyboard?.invoke()
+        releaseDesktopKeyboard = null
         context.contentResolver.unregisterContentObserver(subtypeObserver)
         super.onDetachedFromWindow()
     }
@@ -241,12 +246,24 @@ class KeyboardSink(
         val imm = imm()
         softKeyboard = true
         requestFocus()
+        if (desktopKeyboard != null) {
+            releaseDesktopKeyboard?.invoke()
+            releaseDesktopKeyboard = desktopKeyboard.invoke(this)
+            return
+        }
         imm.restartInput(this)
         imm.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
     }
 
     fun hide() {
         if (!softKeyboard) return
+        if (desktopKeyboard != null) {
+            softKeyboard = false
+            releaseDesktopKeyboard?.invoke()
+            releaseDesktopKeyboard = null
+            bridge.clearLatches()
+            return
+        }
         val imm = imm()
         imm.hideSoftInputFromWindow(windowToken, 0)
         softKeyboard = false

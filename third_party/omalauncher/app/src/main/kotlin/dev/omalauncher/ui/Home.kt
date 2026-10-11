@@ -172,12 +172,12 @@ fun HomeScreen(
     // hiding it again mid-way, while a back swipe still drives its animation, left home taking no touches.
     LaunchedEffect(terminals) {
         snapshotFlow { ime.getBottom(density) > 0 }.collect { shown ->
-            if (!shown && terminals.keyboard?.wanted == true) terminals.deactivate()
+            if (!shown && terminals.keyboard?.wanted == true && terminals.keyboard?.keyboardOnDesktopHost != true) terminals.deactivate()
         }
     }
     // The bar and recent apps don't wait for that: back as the keyboard starts closing, like the pages.
     LaunchedEffect(terminals) {
-        snapshotFlow { imeTarget.getBottom(density) == 0 && terminals.keyboard?.wanted == true }.collect { terminals.keyboardLeaving = it }
+        snapshotFlow { imeTarget.getBottom(density) == 0 && terminals.keyboard?.wanted == true && terminals.keyboard?.keyboardOnDesktopHost != true }.collect { terminals.keyboardLeaving = it }
     }
     var origin by remember { mutableStateOf(Offset.Zero) }
     val extraKeys = terminals.active != null && extraKeysWanted()
@@ -195,8 +195,9 @@ fun HomeScreen(
             },
     ) {
         // Owns the soft keyboard for terminal tiles.
+        val desktopKeyboard = LocalDesktopKeyboardHost.current
         AndroidView(
-            factory = { KeyboardSink(it, runtime.keyboard).also { sink -> terminals.keyboard = sink } },
+            factory = { KeyboardSink(it, runtime.keyboard, desktopKeyboard).also { sink -> terminals.keyboard = sink } },
             onRelease = { if (terminals.keyboard === it) terminals.keyboard = null },
             modifier = Modifier.size(1.dp),
         )

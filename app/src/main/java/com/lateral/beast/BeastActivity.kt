@@ -738,6 +738,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     override fun routeAppScroll(displayId: Int, x: Int, y: Int, amount: Float): Boolean {
         if (display?.displayId != displayId) return false
+        if (omaDesktop?.popupScroll(x, y, amount * InputSettings.scrollSensitivity) == true) return true
         if (!launcherActive && TransientPanelCoordinator.isActiveOnDisplay(displayId)) return false
         if (desktopAt(x, y)) {
             val properties = arrayOf(MotionEvent.PointerProperties().apply {
@@ -769,6 +770,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     override fun routeAppClick(displayId: Int, x: Int, y: Int, button: Int): Boolean {
         if (display?.displayId != displayId) return false
+        if (omaDesktop?.popupClick(x, y, button) == true) return true
         if (launcherActive && !desktopAt(x, y)) {
             hideLauncher()
             return true
@@ -807,6 +809,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         buttonState: Int,
     ): Boolean {
         if (display?.displayId != displayId) return false
+        if (omaDesktop?.popupPointer(x, y, action, button) == true) return true
         routedLauncherRoot?.let { target ->
             // Consume the captured stream even if dismissal/rebuilding removes the view.
             val valid = target === root && routedLauncherView === launcher &&

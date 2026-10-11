@@ -12,6 +12,9 @@ interface DesktopSession {
     fun themes()
     fun dismissPanels()
     fun key(event: KeyEvent): Boolean
+    fun popupClick(x: Int, y: Int, button: Int): Boolean = false
+    fun popupPointer(x: Int, y: Int, action: Int, button: Int): Boolean = false
+    fun popupScroll(x: Int, y: Int, amount: Float): Boolean = false
     fun close()
 }
 

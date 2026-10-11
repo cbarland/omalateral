@@ -28,6 +28,7 @@ import com.lateral.beast.BeastActivity
 import com.lateral.beast.BeastDisplayModeController
 import com.lateral.beast.BeastWorkspaceController
 import com.lateral.beast.LauncherSearchSession
+import com.lateral.beast.DesktopTextInputSession
 import com.lateral.beast.HostedTextInputSession
 import com.lateral.beast.WorkspaceState
 import com.lateral.beast.AndroidTaskSynchronizer
@@ -116,9 +117,26 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         }
     }
     private val launcherBackCallback = object : OnBackPressedCallback(false) {
-        override fun handleOnBackPressed() = LauncherSearchSession.close()
+        override fun handleOnBackPressed() = closeDesktopKeyboardOrSearch()
+    }
+    private fun closeDesktopKeyboardOrSearch() {
+        DesktopTextInputSession.close()
+        LauncherSearchSession.close()
+    }
+    private val desktopTextListener: () -> Unit = {
+        runOnUiThread {
+            if (::beastSearchField.isInitialized) {
+                syncBeastSearchField()
+                if (DesktopTextInputSession.active) {
+                    desktopInputProxy.requestFocus()
+                    (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(desktopInputProxy)
+                    focusBeastSearchField()
+                }
+            }
+        }
     }
     private var launcherDismissKey: Int? = null
+    private lateinit var desktopInputProxy: DesktopInputProxyView
     private val hostedTextInputListener: () -> Unit = {
         runOnUiThread {
             if (!::hostedKeyboardController.isInitialized) return@runOnUiThread
@@ -280,6 +298,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         )
         applyPhoneWindowFocusMode()
         LauncherSearchSession.addListener(beastSearchListener)
+        DesktopTextInputSession.addListener(desktopTextListener)
         HostedTextInputSession.addListener(hostedTextInputListener)
         hostedKeyboardController.recoverStaleSession {
             if (!PhoneView.active) HostedTextInputSession.target?.let(hostedKeyboardController::begin)
@@ -327,11 +346,11 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val dismissal = event.keyCode == KeyEvent.KEYCODE_ESCAPE || event.keyCode == KeyEvent.KEYCODE_BACK
-        if (dismissal && (LauncherSearchSession.active || launcherDismissKey == event.keyCode)) {
+        if (dismissal && (LauncherSearchSession.active || DesktopTextInputSession.active || launcherDismissKey == event.keyCode)) {
             if (event.action == KeyEvent.ACTION_DOWN) launcherDismissKey = event.keyCode
             if (event.action == KeyEvent.ACTION_UP) {
                 launcherDismissKey = null
-                LauncherSearchSession.close()
+                closeDesktopKeyboardOrSearch()
             }
             return true
         }
@@ -344,6 +363,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         if (::hostedKeyboardController.isInitialized) hostedKeyboardController.destroy()
         resetPhoneWindowFocusLeases()
         LauncherSearchSession.removeListener(beastSearchListener)
+        DesktopTextInputSession.removeListener(desktopTextListener)
         HostedTextInputSession.removeListener(hostedTextInputListener)
         if (::connectionText.isInitialized) window.decorView.removeCallbacks(workspaceGuard)
         if (::connectionText.isInitialized) {
@@ -380,6 +400,16 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         window.decorView.post(workspaceGuard)
         window.decorView.post(::maybeShowAdbBridgeDialog)
         AndroidTaskSynchronizer.requestImmediate()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && ::beastSearchField.isInitialized &&
+            (LauncherSearchSession.active || DesktopTextInputSession.active)) {
+            // Cross-display focus changes can finish after the initial showSoftInput call.
+            window.decorView.removeCallbacks(beastSearchFocus)
+            window.decorView.post(beastSearchFocus)
+        }
     }
 
     override fun onUserInteraction() {
@@ -648,7 +678,9 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             setTextColor(InputSettings.theme.brightForeground)
             setHintTextColor(InputSettings.theme.muted)
             visibility = View.GONE
-            addTextChangedListener(SimpleTextWatcher { LauncherSearchSession.updateQuery(it) })
+            addTextChangedListener(SimpleTextWatcher {
+                if (!DesktopTextInputSession.active) LauncherSearchSession.updateQuery(it)
+            })
             setOnEditorActionListener { _, _, event ->
                 val enter = event == null ||
                     (event.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)
@@ -663,12 +695,14 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             setTextColor(ACCENT)
             background = outlinedBackground(InputSettings.accentOutlineColor())
             visibility = View.GONE
-            setOnClickListener { LauncherSearchSession.close() }
+            setOnClickListener { closeDesktopKeyboardOrSearch() }
         }
+        desktopInputProxy = DesktopInputProxyView(this).apply { visibility = View.GONE }
         phoneProxyContainer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             visibility = View.GONE
             addView(beastSearchField, LinearLayout.LayoutParams(0, dp(48), 1f))
+            addView(desktopInputProxy, LinearLayout.LayoutParams(0, dp(48), 1f))
             addView(phoneProxyClose, LinearLayout.LayoutParams(dp(72), dp(48)).apply {
                 marginStart = dp(6)
             })
@@ -1273,19 +1307,30 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     }
 
     private fun focusBeastSearchField() {
-        if (!activityResumed || isFinishing || isDestroyed || !LauncherSearchSession.active) return
+        if (!activityResumed || isFinishing || isDestroyed || (!LauncherSearchSession.active && !DesktopTextInputSession.active)) return
         syncBeastSearchField()
-        beastSearchField.requestFocus()
-        beastSearchField.post {
+        val editor = if (DesktopTextInputSession.active) desktopInputProxy else beastSearchField
+        editor.requestFocus()
+        editor.post {
+            if (!editor.isShown || !editor.hasFocus()) return@post
             (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
-                .showSoftInput(beastSearchField, InputMethodManager.SHOW_IMPLICIT)
+                .showSoftInput(editor, InputMethodManager.SHOW_IMPLICIT)
         }
     }
 
     /** Keeps Beast's query in PhoneUI without placing a modal window over the touchpad. */
     private fun syncBeastSearchField() {
-        launcherBackCallback.isEnabled = LauncherSearchSession.active
-        if (!LauncherSearchSession.active) {
+        if (!DesktopTextInputSession.active) {
+            desktopInputProxy.stop()
+            if (desktopInputProxy.hasFocus()) {
+                desktopInputProxy.clearFocus()
+                (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                    .hideSoftInputFromWindow(desktopInputProxy.windowToken, 0)
+            }
+        }
+        desktopInputProxy.visibility = if (DesktopTextInputSession.active) View.VISIBLE else View.GONE
+        launcherBackCallback.isEnabled = LauncherSearchSession.active || DesktopTextInputSession.active
+        if (!LauncherSearchSession.active && !DesktopTextInputSession.active) {
             phoneProxyContainer.visibility = View.GONE
             beastSearchField.visibility = View.GONE
             phoneProxyClose.visibility = View.GONE
@@ -1302,8 +1347,9 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             beastSearchFocusLease = acquirePhoneWindowFocus()
         }
         phoneProxyContainer.visibility = View.VISIBLE
-        beastSearchField.visibility = View.VISIBLE
+        beastSearchField.visibility = if (DesktopTextInputSession.active) View.GONE else View.VISIBLE
         phoneProxyClose.visibility = View.VISIBLE
+        if (DesktopTextInputSession.active) return
         val query = LauncherSearchSession.query
         if (beastSearchField.text.toString() != query) {
             beastSearchField.setText(query)

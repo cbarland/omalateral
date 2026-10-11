@@ -22,6 +22,7 @@ object HostedTextInputSession {
     fun removeListener(listener: () -> Unit) { listeners -= listener }
 
     fun begin(target: Target) {
+        DesktopTextInputSession.close()
         LauncherSearchSession.close()
         this.target = target
         listeners.forEach { it() }

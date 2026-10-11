@@ -1,6 +1,21 @@
 package com.lateral.beast
 
 import android.view.KeyEvent
+import android.app.ActivityOptions
+import android.content.Intent
+import android.view.Display
+import android.view.View
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.platform.InterceptPlatformTextInput
+import androidx.compose.ui.platform.PlatformTextInputInterceptor
+import com.lateral.MainActivity
+import dev.omalauncher.ui.LocalDesktopWindowHost
+import dev.omalauncher.ui.LocalDesktopKeyboardHost
+import kotlinx.coroutines.awaitCancellation
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
@@ -14,6 +29,7 @@ import dev.omalauncher.ui.LauncherState
 import dev.omalauncher.ui.PromptRequest
 
 /** The upstream launcher rendered in Beast's window, with Android launches owned by Beast. */
+@OptIn(ExperimentalComposeUiApi::class)
 class OmaDesktop(
     private val activity: ComponentActivity,
     private val onLaunch: () -> Unit,
@@ -22,6 +38,8 @@ class OmaDesktop(
     private val runtime = (activity.application as RuntimeOwner).runtime
     private val state = LauncherState()
     private var started = false
+    private val windows = DesktopWindows { activity.display?.displayId ?: Display.DEFAULT_DISPLAY }
+    private var editor: DesktopTextInputSession.Editor? = null
     private val launch: (dev.omalauncher.AndroidApp) -> Unit = { app ->
         WorkspaceState.launchNew(app.component.packageName, app.component.className, app.label)
         onLaunch()
@@ -36,7 +54,24 @@ class OmaDesktop(
     override val view = ComposeView(activity).apply {
         setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
         setContent {
-            LauncherRoot(runtime, state)
+            val interceptor = remember {
+                PlatformTextInputInterceptor { request, next ->
+                    if (activity.display?.displayId == Display.DEFAULT_DISPLAY) next.startInputMethod(request)
+                    val session = openEditor(request::createInputConnection) { next.view.clearFocus() }
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        DesktopTextInputSession.release(session)
+                        if (editor === session) editor = null
+                    }
+                }
+            }
+            CompositionLocalProvider(
+                LocalDesktopWindowHost provides if (activity.display?.displayId == Display.DEFAULT_DISPLAY) null else windows::attach,
+                LocalDesktopKeyboardHost provides if (activity.display?.displayId == Display.DEFAULT_DISPLAY) null else ::openNativeEditor,
+            ) {
+                InterceptPlatformTextInput(interceptor) { LauncherRoot(runtime, state) }
+            }
             LaunchedEffect(runtime) {
                 snapshotFlow { runtime.themes.picked }.collect { name ->
                     val theme = OmarchyThemes.all.firstOrNull { it.id == name }
@@ -82,6 +117,7 @@ class OmaDesktop(
     override fun themes() { state.styleOpen = true }
 
     override fun dismissPanels() {
+        editor?.let { DesktopTextInputSession.release(it) }
         state.closeNow()
         state.closeScreens()
         state.editing = null
@@ -102,9 +138,34 @@ class OmaDesktop(
     }
 
     override fun close() {
+        editor?.let { DesktopTextInputSession.release(it) }
+        windows.close()
         visible(false)
         InputSettings.removeAppearanceListener(appearance)
         if (runtime.androidLauncher === launch) runtime.androidLauncher = null
         view.disposeComposition()
+    }
+
+    override fun popupClick(x: Int, y: Int, button: Int) = windows.click(x, y, button)
+    override fun popupPointer(x: Int, y: Int, action: Int, button: Int) = windows.pointer(x, y, action, button)
+    override fun popupScroll(x: Int, y: Int, amount: Float) = windows.scroll(x, y, amount)
+
+    private fun openNativeEditor(view: View): () -> Unit {
+        val session = openEditor({ checkNotNull(view.onCreateInputConnection(it)) }) {
+            (view as? dev.omalauncher.ui.KeyboardSink)?.hide()
+            view.clearFocus()
+        }
+        return { DesktopTextInputSession.release(session); if (editor === session) editor = null }
+    }
+
+    private fun openEditor(factory: (EditorInfo) -> InputConnection, dismiss: () -> Unit): DesktopTextInputSession.Editor {
+        val session = DesktopTextInputSession.begin(factory, dismiss)
+        editor = session
+        MainActivity.restorePhoneUiAfterExternalTaskBatch()
+        activity.startActivity(Intent(activity, MainActivity::class.java).apply {
+            action = MainActivity.ACTION_BEAST_LAUNCHER_SEARCH
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }, ActivityOptions.makeBasic().apply { launchDisplayId = Display.DEFAULT_DISPLAY }.toBundle())
+        return session
     }
 }

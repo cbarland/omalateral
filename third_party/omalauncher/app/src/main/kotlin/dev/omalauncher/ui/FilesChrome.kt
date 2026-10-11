@@ -262,6 +262,7 @@ internal fun MenuPopup(
     onDismiss: () -> Unit,
 ) {
     Popup(alignment = Alignment.TopEnd, onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
+        DesktopWindow(onDismiss)
         MenuItems(items, onDismiss, minWidth = 200.dp, itemPadding = 13.dp, fontSize = TextSize.Item)
     }
 }
