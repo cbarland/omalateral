@@ -1,4 +1,4 @@
-# omalateral — external-desktop prototype
+# omalateral — Omalauncher on your external desktop
 
 Independent Android app (`com.omalateral`) combining LATERAL main's BeastUI
 workspace with the real Omalauncher launcher, OWL widgets, widget store, and
@@ -24,18 +24,136 @@ implemented in both apps. **This alpha does not connect to stock Omalauncher or
 share its data.** With no bridge, it always uses its own embedded desktop.
 See the [upstream proposal](https://github.com/SimonSchubert/omalauncher/issues/34).
 
-Right-click opens the home menu on empty space or selects a
-widget for editing. Both captured USB/Bluetooth mouse input and Android-native
-mouse events are supported. On PhoneUI's touchpad, tap once, then tap and hold
-the second tap to perform the same action; a quick double-tap remains two clicks.
+[Screenshots](#screenshots) · [Getting started](#getting-started) ·
+[How to use](#how-to-use) · [Limitations](#current-limitations) ·
+[Build from source](#build-omalateral-from-source)
 
-Build on Windows after configuring Android SDK/JDK:
+## Screenshots
 
-```powershell
-git submodule update --init
-./scripts/fetch-oma-proot.ps1
-./gradlew.bat :app:assembleStableDebug :owl:testDebugUnitTest -Plateral.vitureSdk=false
-```
+Actual captures from the alpha06 Android 15 emulator validation, using the
+Catppuccin theme and an external display. These are not mockups or evidence of
+compatibility with every physical phone/display.
+
+### Home and widgets
+
+The embedded Omalauncher home stays behind the workspace: calendar/weather,
+system information, optional terminal, and animated OWL widgets.
+
+![Omalauncher home in the omalateral external workspace, with Catppuccin colors and OWL widgets](docs/images/omalateral-alpha06/desktop.png)
+
+<details>
+<summary>App-tile layering and the theme-install dialog</summary>
+
+The window decorator and numbered taskbar sit above the home. The empty
+**TEST TILE** below is a validation fixture, not a running third-party app.
+
+![Test app tile above the embedded desktop, with window controls and a numbered taskbar](docs/images/omalateral-alpha06/app-tile.png)
+
+The pointer stays above the theme-install dialog. This is a capture of the
+dialog's own window; the black area is not the composed desktop. Text is entered
+using the phone keyboard, which is on the other display and is not pictured.
+The example URL is test input, not a theme recommendation.
+
+![Theme-install dialog with the workspace pointer visible above its URL field](docs/images/omalateral-alpha06/theme-dialog.png)
+
+</details>
+
+## Getting started
+
+1. Download the ARM64 APK from [omalateral releases](https://github.com/cbarland/omalateral/releases)
+   and install it on your phone. Allow installation from your browser/file manager
+   if Android asks. To update, install over the existing omalateral app without
+   uninstalling it; this preserves your settings and local runtime.
+2. Connect an external monitor or glasses through a video-capable connection,
+   then open **omalateral** on the phone. PhoneUI is the controller;
+   BeastUI is the external desktop. The SDK-free APK does not include VITURE-only
+   timing controls.
+3. To host Android apps, activate the privileged helper. Tap the **display/status
+   text in PhoneUI's top row**, then **Privileged helper** (the config dialog still
+   carries the inherited `LATERAL_ / config` title).
+
+   - **Shizuku:** start Shizuku v13+ in ADB/shell mode, select it in the helper
+     panel, authorize **omalateral**, and wait for the connected state. Root mode
+     is not supported. Restart Shizuku after a phone reboot.
+   - **Wireless ADB:** select this backend and follow the pairing flow using
+     Android Developer options → Wireless debugging → Pair device with pairing
+     code. Submit the code through the app's pairing notification.
+   - The inherited [helper guide](docs/SHIZUKU.md) explains setup and recovery;
+     authorize **omalateral**, not a separate LATERAL installation.
+
+4. Use **+APPS** on the external top bar, or **apps** on PhoneUI, to launch an
+   Android app into the workspace. Use **DESKTOP** to minimize the app tiles and
+   return to the home/widgets; select a numbered task tab to return to an app.
+
+You do **not** need standalone Omalauncher or a Linux installation to start using
+the embedded home. Features marked **needs Linux** are optional and experimental.
+The inherited physical-hardware baseline is Nubia NX789J / Android 15 with VITURE
+Beast; alpha06's final validation was on an Android API 35 emulator with an
+external display. Other hardware is not guaranteed to work.
+
+## How to use
+
+### Pointer, scrolling, and typing
+
+- Move your finger on PhoneUI's touchpad to move the external pointer; tap to click.
+- For the home context menu, tap once, then **tap and hold the second tap**.
+  A quick double-tap remains two clicks. Right-clicking empty desktop space opens
+  the home menu; right-clicking a widget selects it for editing.
+- USB/Bluetooth mouse input and Android-native mouse right-click are supported.
+- Use the vertical scroll strip to scroll content under the pointer. The horizontal
+  strip **below the touchpad, above the taskbar** pans the workspace sideways.
+  Selecting/interacting with an app reveals it; panning alone does not change focus.
+- Click an embedded Omalauncher text field, such as the theme-install URL field,
+  to open the phone's software keyboard automatically. Input edits the external
+  field directly. Use PhoneUI's close control, Back, or Escape to end typing.
+  Hosted Android apps use the separate embedded FlorisBoard keyboard path.
+
+### External top bar
+
+| Control | Action |
+| --- | --- |
+| `DESKTOP` | Minimize app tiles and reveal the embedded home. |
+| `+APPS` | Open the app drawer and launch apps into the workspace. |
+| `WIDGETS` | Open Omalauncher's widget controls. |
+| `THEMES` | Browse/select themes or open the theme-install dialog. Bundled themes synchronize with PhoneUI and BeastUI. |
+| `OMA: LOCAL` | Show desktop connection status; the current runtime belongs to omalateral. |
+| `SHOW ALL` / `MIN ALL` | Restore workspace apps / minimize them without closing their tasks. |
+| `CLOSE ALL` | Close managed app tasks. Use this only when you intend to close them. |
+| `CAPTURE` | Save the BeastUI window as a PNG in Gallery under `Pictures/LATERAL_`. |
+| `→DISPLAY` | Open external-display information and display/profile controls. |
+| `SETTINGS` | Open general input and appearance settings. |
+
+The small arrows at the ends of the top-bar control group reveal controls that
+do not fit. PhoneUI also has **disp** for display information/scaling and **set**
+for general settings; **apps** opens a phone-side chooser for workspace apps.
+
+### App tiles and taskbar
+
+- Click a numbered task tab (`01`, `02`, …) to focus or restore that app.
+  Taskbar edge arrows reveal tabs that are off-screen.
+- In a tile's decorator, `<-` sends Back to the app; `<` and `>` beside its title
+  move the tile left or right in the workspace order.
+- `_` minimizes; `P` / `T` switches phone/tablet presentation; `[]` enters fullscreen.
+  In fullscreen, use the **top-right `[P]` or `[T]` control** to return to the previous
+  presentation rather than closing the app.
+- `cap` captures the focused app surface without workspace chrome; `x` closes
+  that Android task, not every instance of its package.
+- The home stays mounted underneath app tiles. **DESKTOP** reveals it, while
+  **WIDGETS**, **THEMES**, and **+APPS** open their panels above the tiles.
+
+### If something does not work
+
+- **No external desktop:** check that Android detects the external display;
+  PhoneUI → **disp** shows its name, resolution, and refresh rate, or a no-display state.
+- **Apps will not open / input stops:** check the helper connection from the
+  PhoneUI status text → **Privileged helper**. Use **Restart helper** after an
+  update if needed; Shizuku must be restarted after reboot.
+- **A text field does not bring up the phone keyboard:** finish or dismiss any
+  PhoneUI setup dialog, then select the external field again.
+- **Looking for existing Omalauncher widgets or Linux setup:** this alpha has
+  its own runtime. `OMA: LOCAL` does not mean it is connected to stock Omalauncher.
+
+## Current limitations
 
 This is an integration alpha. The optional Arch/PRoot code and pinned runtime
 are included, but installing Linux and hosting its separate window activities
@@ -45,8 +163,28 @@ and marketplace formats are retained; account/secret and full-home migration
 remain separate work. Built-in themes synchronize with Beast/PhoneUI; arbitrary
 community palette synchronization still needs extending.
 
+The alpha APK remains test-signed and debuggable. The public external-desktop
+bridge is a proposal, not an available connection to standalone Omalauncher.
+
+## Build omalateral from source
+
+On Windows, configure the Android SDK/JDK and native build prerequisites in the
+inherited [installation guide](docs/INSTALLATION.md), then run:
+
+```powershell
+git submodule update --init
+./scripts/fetch-oma-proot.ps1
+./gradlew.bat :app:assembleStableDebug :owl:testDebugUnitTest -Plateral.vitureSdk=false
+```
+
+The APK is `app/build/outputs/apk/stable/debug/app-stable-debug.apk`.
+Install or update without clearing data using `adb install -r <apk-path>`.
+
 The original LATERAL documentation below describes the inherited workspace
 engine and its hardware requirements; its release links refer to LATERAL.
+
+<details>
+<summary>Inherited LATERAL reference: architecture, hardware, builds, and troubleshooting</summary>
 
 ## Inherited LATERAL documentation
 
@@ -239,7 +377,13 @@ Ultrawide mode is detected from the connected display. LATERAL_ corrects for the
 - **External display changed mode**: allow LATERAL_ to reconfigure the workspace; it preserves the workspace model and reattaches hosted surfaces where the firmware allows it.
 - **Unexpected task state**: Android Overview remains authoritative for task existence. LATERAL_ reconciles task snapshots while Beast is connected, while avoiding system, Home, LATERAL_, and known device ghost records.
 
+</details>
+
 ## License and attribution
+
+This is an independent integration, not an official Omalauncher or Omarchy release.
+See [UPSTREAMS.md](UPSTREAMS.md) for provenance and integration changes.
+The Omalauncher component retains its [MIT license](third_party/omalauncher/LICENSE).
 
 LATERAL_-specific code is licensed under [Apache-2.0](LICENSE). See
 [NOTICE](NOTICE), [`LICENSE-UXSPACE`](LICENSE-UXSPACE), and
