@@ -16,7 +16,7 @@ if ($Serial) { $adbArgs += @('-s', $Serial) }
 
 Push-Location $root
 try {
-    & .\gradlew.bat ':app:testStableDebugUnitTest' ':app:assembleStableDebug' ':app:assembleStableDebugAndroidTest' '--offline' '--console=plain'
+    & .\gradlew.bat ':app:testStableDebugUnitTest' ':app:assembleStableDebug' ':app:assembleStableDebugAndroidTest' '-Plateral.vitureSdk=false' '--offline' '--console=plain'
     if ($LASTEXITCODE -ne 0) { throw "Gradle assemble failed: $LASTEXITCODE" }
     if (!(Test-Path $appApk) -or !(Test-Path $testApk)) { throw 'Expected stable app and instrumentation APKs were not produced.' }
     & $adb @adbArgs install -r $appApk
@@ -30,7 +30,7 @@ try {
     foreach ($setting in @('window_animation_scale', 'transition_animation_scale', 'animator_duration_scale')) {
         & $adb @adbArgs shell settings put global $setting 0
     }
-    $runner = 'com.lateral.test/androidx.test.runner.AndroidJUnitRunner'
+    $runner = 'com.omalateral.test/androidx.test.runner.AndroidJUnitRunner'
     $result = & $adb @adbArgs shell am instrument -w -e class 'com.lateral.beast.BeastUsbBootstrapUiAndroidTest' $runner
     $result | Write-Output
     if (($result -join "`n") -notmatch 'OK \(1 test\)' -or ($result -join "`n") -match 'FAILURES|INSTRUMENTATION_FAILED') { throw 'Beast UI instrumentation did not pass.' }

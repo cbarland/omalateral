@@ -1,0 +1,33 @@
+widget "updates" {
+  page: 4
+  order: 2
+  size: 3x3
+  minSize: 2x2
+
+  // Syncs a private copy of the package databases in /tmp (what checkupdates does, without
+  // fakeroot), so the real ones stay untouched and pacman's lock is never taken.
+  source pending = cmd("""
+    t=/tmp/owl-updates
+    mkdir -p "$t"
+    ln -sfn /var/lib/pacman/local "$t/local"
+    pacman -Sy --dbpath "$t" --logfile /dev/null >/dev/null 2>&1 || { echo error; exit; }
+    pacman -Qu --dbpath "$t"
+  """) every 1h timeout 90s
+  let failed = pending == "error"
+  let list = pending == null || failed ? null : lines(pending).filter(l => l != "").map(l => words(l)[0])
+
+  onTap: terminal("pacman -Syu", "updates")
+
+  Column {
+    gap: 2
+    Text { text: "updates"; style: muted }
+    Text {
+      text: failed ? "offline" : list == null ? "…" : "${len(list)}"
+      style: title
+      color: failed || list == null ? muted : len(list) > 0 ? yellow : green
+    }
+    if list != null {
+      Text { text: len(list) == 0 ? "up to date" : join(list.take(4), " "); style: small; maxLines: 2 }
+    }
+  }
+}

@@ -23,8 +23,13 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "LATERAL_"
+rootProject.name = "omalateral"
 include(":app")
+include(":omalauncher", ":owl")
+project(":omalauncher").projectDir = file("third_party/omalauncher/app")
+project(":omalauncher").buildFileName = "omalateral.gradle.kts"
+project(":owl").projectDir = file("third_party/omalauncher/owl")
+project(":owl").buildFileName = "omalateral.gradle.kts"
 includeBuild("third_party/florisboard") {
     dependencySubstitution {
         substitute(module("com.lateral.thirdparty:florisboard-embedded"))

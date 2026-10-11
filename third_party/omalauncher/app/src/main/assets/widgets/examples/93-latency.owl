@@ -1,0 +1,26 @@
+widget "latency" {
+  page: 3
+  order: 4
+  size: 6x2
+  minSize: 3x2
+
+  requires { pacman: ["curl"] }
+
+  // stream(): one long-running command; each output line becomes the new value.
+  source rtt = stream("while :; do curl -o /dev/null -s -m 4 -w '%{time_total}\n' https://1.1.1.1 || echo -1; sleep 5; done")
+  let ms = num(rtt) >= 0 ? round(num(rtt) * 1000) : null
+  let hist = history(ms, 60)
+
+  Column {
+    gap: 4
+    Row {
+      Text { text: "latency · 1.1.1.1"; style: muted; weight: 1 }
+      Text {
+        text: rtt == null ? "…" : ms == null ? "offline" : "${ms} ms"
+        color: ms == null ? red : ms > 200 ? red : ms > 80 ? yellow : green
+        width: 96; align: end
+      }
+    }
+    Sparkline { values: hist; min: 0; color: cyan; area: true; fill: width; weight: 1 }
+  }
+}

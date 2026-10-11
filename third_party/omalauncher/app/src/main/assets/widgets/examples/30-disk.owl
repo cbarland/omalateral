@@ -1,0 +1,20 @@
+widget "disk" {
+  page: 1
+  order: 3
+  size: 3x2
+  minSize: 2x2
+
+  requires { pacman: ["dua-cli"] }
+
+  source df = cmd('df -B1 --output=avail,pcent / | tail -1') every 120s
+  let use = num(words(df)[1])
+
+  onTap: terminal("dua i /")
+
+  Column {
+    Text { text: "disk"; style: muted }
+    Text { text: "${use}%"; style: title }
+    Progress { value: use; color: use > 90 ? red : yellow }
+    Text { text: "${fmtBytes(num(words(df)[0]))} free"; style: small }
+  }
+}

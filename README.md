@@ -1,4 +1,54 @@
-# LATERAL_
+# omalateral — external-desktop prototype
+
+Independent Android app (`com.omalateral`) combining LATERAL main's BeastUI
+workspace with the real Omalauncher launcher, OWL widgets, widget store, and
+Omarchy themes. Installs beside both original apps. See [UPSTREAMS.md](UPSTREAMS.md)
+for exact source revisions and attribution.
+
+Download testing APKs from [omalateral releases](https://github.com/cbarland/omalateral/releases).
+The alpha APK is the ARM64, SDK-free `stableDebug` build: test-signed and
+debuggable, not a production-hardened release. It installs beside LATERAL and
+standalone Omalauncher. Do not uninstall an existing omalateral alpha to update it.
+
+The external display opens the embedded Omalauncher home by default, with
+Android app tiles above it. **OMA: LOCAL** identifies the active local runtime.
+Widgets, themes, settings and any optional Linux installation belong to
+`com.omalateral`; an existing standalone Omalauncher installation is unchanged.
+Starting the desktop does not automatically install a Linux distribution.
+
+Bridge preparation includes standalone Omalauncher detection on startup/resume
+and package changes, a desktop-session interface, and lazy provider selection
+that can prefer an authorized external session without starting a local runtime.
+The external adapter is deliberately unavailable until a protocol is agreed and
+implemented in both apps. **This alpha does not connect to stock Omalauncher or
+share its data.** With no bridge, it always uses its own embedded desktop.
+See the [upstream proposal](https://github.com/SimonSchubert/omalauncher/issues/34).
+
+Right-click opens the home menu on empty space or selects a
+widget for editing. Both captured USB/Bluetooth mouse input and Android-native
+mouse events are supported. On PhoneUI's touchpad, tap once, then tap and hold
+the second tap to perform the same action; a quick double-tap remains two clicks.
+
+Build on Windows after configuring Android SDK/JDK:
+
+```powershell
+git submodule update --init
+./scripts/fetch-oma-proot.ps1
+./gradlew.bat :app:assembleStableDebug :owl:testDebugUnitTest -Plateral.vitureSdk=false
+```
+
+This is an integration alpha. The optional Arch/PRoot code and pinned runtime
+are included, but installing Linux and hosting its separate window activities
+alongside Android tasks are not yet validated. Shared app data is not automatic:
+Omalauncher and omalateral have separate Android sandboxes. Existing OWL source
+and marketplace formats are retained; account/secret and full-home migration
+remain separate work. Built-in themes synchronize with Beast/PhoneUI; arbitrary
+community palette synchronization still needs extending.
+
+The original LATERAL documentation below describes the inherited workspace
+engine and its hardware requirements; its release links refer to LATERAL.
+
+## Inherited LATERAL documentation
 
 LATERAL_ is a device-specific dual-display workspace for a Nubia NX789J phone and VITURE Beast glasses. It keeps a purpose-built **PhoneUI** on the phone and a pinned **BeastUI** workspace on the glasses, while treating Android task IDs as the identity of the apps being managed.
 

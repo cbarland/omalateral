@@ -2448,10 +2448,10 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         private const val FLAG_NEW_TASK_MULTIPLE = "0x18000000"
 
         /** Existing PhoneUI activity used to reclaim focus after an OEM task race. */
-        private const val PHONE_UI_PACKAGE = "com.lateral"
+        private const val PHONE_UI_PACKAGE = com.lateral.BuildConfig.APPLICATION_ID
         private const val PHONE_UI_ACTIVITY = "com.lateral.MainActivity"
-        private const val PHONE_UI_COMPONENT = "com.lateral/.MainActivity"
-        private const val PHONE_UI_FOCUS_ACTION = "com.lateral.action.PHONE_FOCUS_REPAIR"
+        private const val PHONE_UI_COMPONENT = PHONE_UI_PACKAGE + "/com.lateral.MainActivity"
+        private const val PHONE_UI_FOCUS_ACTION = PHONE_UI_PACKAGE + ".action.PHONE_FOCUS_REPAIR"
         private const val PHONE_UI_REPAIR_FLAGS = "0x14000000" // NEW_TASK | CLEAR_TOP
 
         /** Frame spacing for the pinch interpolation in [pinchOnDisplay]. */

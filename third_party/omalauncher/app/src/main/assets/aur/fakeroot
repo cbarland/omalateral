@@ -1,0 +1,7 @@
+#!/bin/sh
+# Stands in for fakeroot while building AUR packages: the real one talks to
+# its faked daemon over SysV IPC, which Android kernels don't have. Nothing is
+# lost: proot already reports every file as root's, and pacman -U runs as root.
+# makepkg only re-enters itself with -F when FAKEROOTKEY is set.
+[ "$1" = -- ] && shift
+FAKEROOTKEY=proot exec "$@"

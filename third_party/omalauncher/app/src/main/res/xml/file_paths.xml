@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Files hands guest files to Android apps ("open with", "share"); the rootfs lives in files/arch,
+     and proot binds /tmp, the runtime dir and the launcher's own data (LauncherData) from beside it. -->
+<paths>
+    <files-path name="guest" path="arch/" />
+    <files-path name="tmp" path="tmp/" />
+    <files-path name="xdg" path="xdg/" />
+    <files-path name="omarchy" path="omarchy/" />
+    <files-path name="widgets" path="widgets/" />
+    <!-- QR codes of widgets, for sharing as an image. -->
+    <cache-path name="share" path="share/" />
+</paths>

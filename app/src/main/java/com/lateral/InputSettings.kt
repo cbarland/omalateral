@@ -33,12 +33,7 @@ object InputSettings {
     private const val KEY_CENTER_BOTTOM_CONTROLS = "center_bottom_controls"
     private const val KEY_TOOLBAR_ALIGNMENT = "toolbar_alignment"
     private const val KEY_TASKBAR_ALIGNMENT = "taskbar_alignment"
-    private const val KEY_ACCENT_HUE = "accent_hue"
-    private const val KEY_ACCENT_SATURATION = "accent_saturation"
-
-    private val defaultAccentHsv = FloatArray(3).also {
-        Color.colorToHSV(Color.rgb(121, 199, 211), it)
-    }
+    private const val KEY_THEME = "omarchy_theme"
 
     @Volatile var cursorSensitivity = 1.4f
         private set
@@ -77,11 +72,9 @@ object InputSettings {
         private set
     @Volatile var taskbarAlignment = BarAlignment.LEFT
         private set
-    @Volatile var accentHue = defaultAccentHsv[0]
+    @Volatile var theme = OmarchyThemes.default
         private set
-    @Volatile var accentSaturation = defaultAccentHsv[1]
-        private set
-    @Volatile var accentColor = Color.rgb(121, 199, 211)
+    @Volatile var accentColor = OmarchyThemes.default.accent
         private set
     /** PhoneUI is authoritative for hosted-app resources, independent of Beast chrome. */
     @Volatile var phoneAppDensityDpi = DEFAULT_PHONE_APP_DENSITY_DPI
@@ -140,9 +133,8 @@ object InputSettings {
         taskbarAlignment = prefs.getString(KEY_TASKBAR_ALIGNMENT, BarAlignment.LEFT.name)
             ?.let { runCatching { BarAlignment.valueOf(it) }.getOrNull() }
             ?: BarAlignment.LEFT
-        accentHue = prefs.getFloat(KEY_ACCENT_HUE, defaultAccentHsv[0]).coerceIn(0f, 360f)
-        accentSaturation = prefs.getFloat(KEY_ACCENT_SATURATION, defaultAccentHsv[1]).coerceIn(0f, 1f)
-        accentColor = colorForAccent(accentHue, accentSaturation)
+        theme = OmarchyThemes.byId(prefs.getString(KEY_THEME, OmarchyThemes.DEFAULT_ID).orEmpty())
+        accentColor = theme.accent
     }
 
     fun setCursorSensitivity(context: Context, value: Float) {
@@ -246,30 +238,20 @@ object InputSettings {
         displaySupersampling,
     )
 
-    fun setAccent(context: Context, hue: Float, saturation: Float) {
-        accentHue = ((hue % 360f) + 360f) % 360f
-        accentSaturation = saturation.coerceIn(0f, 1f)
-        accentColor = colorForAccent(accentHue, accentSaturation)
+    fun setTheme(context: Context, next: OmarchyTheme) {
+        theme = next
+        accentColor = next.accent
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putFloat(KEY_ACCENT_HUE, accentHue)
-            .putFloat(KEY_ACCENT_SATURATION, accentSaturation)
+            .putString(KEY_THEME, next.id)
             .apply()
         appearanceListeners.forEach { it() }
     }
 
-    fun resetAccent(context: Context) {
-        setAccent(context, defaultAccentHsv[0], defaultAccentHsv[1])
+    fun resetTheme(context: Context) {
+        setTheme(context, OmarchyThemes.default)
     }
 
-    fun accentOutlineColor(): Int {
-        val hsv = floatArrayOf(accentHue, maxOf(.18f, accentSaturation * .72f), .48f)
-        return Color.HSVToColor(hsv)
-    }
-
-    fun accentValue() = defaultAccentHsv[2]
-
-    private fun colorForAccent(hue: Float, saturation: Float): Int =
-        Color.HSVToColor(floatArrayOf(hue, saturation, defaultAccentHsv[2]))
+    fun accentOutlineColor(): Int = theme.selection
 
     fun setStartOpenAppsMinimized(context: Context, value: Boolean) {
         startOpenAppsMinimized = value

@@ -336,8 +336,7 @@ class UsbHelperLifecycleAndroidTest {
                 PrivilegedService.maySweepOrphanHelpers())
             val binder = checkNotNull(currentBinder())
             assertTrue("published Binder is not alive", binder.pingBinder())
-            remote = checkNotNull(PrivilegedService::class.java.getDeclaredField("service")
-                .apply { isAccessible = true }.get(PrivilegedService) as? IPrivilegedService)
+            remote = IPrivilegedService.Stub.asInterface(checkNotNull(currentBinder()))
             displayId = remote!!.createVirtualDisplay("lateral-adb-acceptance", 64, 64,
                 instrumentation.targetContext.resources.displayMetrics.densityDpi, surface)
             assertTrue("trusted virtual display creation failed", displayId >= 0)
@@ -375,8 +374,7 @@ class UsbHelperLifecycleAndroidTest {
         try {
             awaitReady(helper)
             val binder = checkNotNull(currentBinder())
-            remote = checkNotNull(PrivilegedService::class.java.getDeclaredField("service")
-                .apply { isAccessible = true }.get(PrivilegedService) as? IPrivilegedService)
+            remote = IPrivilegedService.Stub.asInterface(checkNotNull(currentBinder()))
             displayId = remote!!.createVirtualDisplay("lateral-detached-usb", 64, 64,
                 instrumentation.targetContext.resources.displayMetrics.densityDpi, surface)
             assertTrue("trusted virtual display creation failed", displayId >= 0)
@@ -422,8 +420,7 @@ class UsbHelperLifecycleAndroidTest {
             awaitReady(helper)
             val binder = checkNotNull(currentBinder())
             assertEquals(PrivilegedService.BridgeTransport.USB, PrivilegedService.bridgeTransport())
-            remote = checkNotNull(PrivilegedService::class.java.getDeclaredField("service")
-                .apply { isAccessible = true }.get(PrivilegedService) as? IPrivilegedService)
+            remote = IPrivilegedService.Stub.asInterface(checkNotNull(currentBinder()))
 
             PrivilegedService.addListener(listener)
             PrivilegedService.init(instrumentation.targetContext)

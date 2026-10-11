@@ -13,13 +13,13 @@ import org.florisboard.lib.snygg.SnyggSinglePropertySetEditor
 internal fun lateralKeyboardTheme(): EmbeddedKeyboardTheme {
     val accent = InputSettings.accentColor
     val accentVariant = InputSettings.accentOutlineColor()
-    val background = Color.rgb(9, 10, 11)
-    val backgroundVariant = Color.rgb(16, 20, 21)
-    val surface = Color.rgb(23, 29, 30)
-    val surfaceVariant = Color.rgb(39, 49, 51)
-    val onBackground = Color.rgb(235, 240, 239)
-    val onSurface = Color.rgb(235, 240, 239)
-    val onSurfaceVariant = Color.rgb(150, 162, 166)
+    val background = InputSettings.theme.background
+    val backgroundVariant = InputSettings.theme.darkBackground
+    val surface = InputSettings.theme.lighterBackground
+    val surfaceVariant = InputSettings.theme.selection
+    val onBackground = InputSettings.theme.brightForeground
+    val onSurface = InputSettings.theme.foreground
+    val onSurfaceVariant = InputSettings.theme.darkForeground
 
     val stylesheet = FlorisImeThemeBaseStyle.edit().apply {
         // Keep FlorisBoard's complete rule set, replacing only its Material palette and
@@ -43,11 +43,11 @@ internal fun lateralKeyboardTheme(): EmbeddedKeyboardTheme {
             "--surface-variant" to rgbaColor(
                 Color.red(surfaceVariant), Color.green(surfaceVariant), Color.blue(surfaceVariant),
             )
-            "--on-primary" to rgbaColor(7, 12, 13)
+            "--on-primary" to rgbaColor(Color.red(background), Color.green(background), Color.blue(background))
             "--on-background" to rgbaColor(
                 Color.red(onBackground), Color.green(onBackground), Color.blue(onBackground),
             )
-            "--on-background-disabled" to rgbaColor(79, 92, 94)
+            "--on-background-disabled" to rgbaColor(Color.red(accentVariant), Color.green(accentVariant), Color.blue(accentVariant))
             "--on-surface" to rgbaColor(Color.red(onSurface), Color.green(onSurface), Color.blue(onSurface))
             "--on-surface-variant" to rgbaColor(
                 Color.red(onSurfaceVariant), Color.green(onSurfaceVariant), Color.blue(onSurfaceVariant),

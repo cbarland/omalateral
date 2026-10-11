@@ -1,0 +1,1 @@
+New app icon. Linux apps can use the GPU on phones with a Mali GPU, like the Pixel 9a: turn it on in Settings › linux. Widgets you made can be published to the widget store with a long press. App icons show in their own colors by default, and agent sessions keep their logo in Recents.

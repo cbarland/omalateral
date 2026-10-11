@@ -1,0 +1,135 @@
+package dev.omalauncher.upgrade
+
+import android.util.Log
+import org.json.JSONObject
+import java.io.File
+import java.security.MessageDigest
+
+/** How a launcher-written file treats the copy on disk. */
+enum class Policy {
+    /** Launcher plumbing (shims, scripts): always rewritten to the current version. */
+    Owned,
+
+    /**
+     * A default the user may edit or delete: updated only while it's unchanged
+     * since we wrote it, never brought back once deleted. A file that was
+     * already there before we first wrote it is the user's.
+     */
+    Seeded,
+}
+
+/** One file the launcher provides. */
+class Managed(
+    val file: File,
+    val policy: Policy,
+    val executable: Boolean = false,
+    val content: () -> ByteArray,
+) {
+    companion object {
+        fun text(
+            file: File,
+            policy: Policy,
+            executable: Boolean = false,
+            content: () -> String,
+        ) = Managed(file, policy, executable) { content().toByteArray() }
+    }
+}
+
+/**
+ * Keeps launcher-provided files in step with the installed APK. Every file
+ * we write is recorded with its hash in a manifest, which tells an untouched
+ * default (safe to update or remove) from one the user edited (left alone).
+ * Files that drop out of the desired set are deleted if still untouched, so
+ * nothing lingers from older versions.
+ */
+class ManagedFiles(
+    /** Paths in the manifest are relative to this, so they survive a moved data dir. */
+    private val base: File,
+    private val manifest: File,
+) {
+    fun sync(desired: List<Managed>) {
+        val recorded = load()
+        val next = HashMap<String, String>()
+        var failed = false
+        for (m in desired) {
+            val key = m.file.relativeTo(base).path
+            val before = recorded[key]
+            val current = hash(m.file)
+            val write =
+                when (m.policy) {
+                    Policy.Owned -> true
+                    // Missing but recorded: the user deleted it. Unrecorded but carrying the marker
+                    // launchers before the manifest wrote: ours, unless the user removed the marker.
+                    Policy.Seeded -> if (current == null) before == null else current == before || (before == null && isLegacyOurs(m.file))
+                }
+            if (!write) {
+                // Edited or deleted defaults keep what we last wrote on record, so they stay the user's, removal included.
+                before?.let { next[key] = it }
+                continue
+            }
+            try {
+                val bytes = m.content()
+                val sha = sha256(bytes)
+                if (current != sha) writeAtomically(m.file, bytes, m.executable)
+                next[key] = sha
+            } catch (e: Exception) {
+                // Keeps the old record: the next sync tries again, and nothing counts as removed.
+                Log.w("managed", "can't write ${m.file}", e)
+                failed = true
+                before?.let { next[key] = it }
+            }
+        }
+        if (failed) return save(recorded + next)
+        for ((key, sha) in recorded - next.keys) {
+            val file = File(base, key)
+            if (hash(file) == sha) file.delete()
+        }
+        save(next)
+    }
+
+    fun forgetAll() = manifest.delete()
+
+    private fun isLegacyOurs(file: File) = file.length() < 1 shl 20 && LEGACY_MARKER in file.readText()
+
+    private fun load(): Map<String, String> {
+        val json = Versioned.read(manifest.takeIf { it.exists() }?.readText(), VERSION) as? JSONObject ?: return emptyMap()
+        return json.keys().asSequence().associateWith { json.getString(it) }
+    }
+
+    private fun save(files: Map<String, String>) =
+        writeAtomically(manifest, Versioned.write(VERSION, JSONObject(files as Map<*, *>)).toByteArray(), executable = false)
+
+    private companion object {
+        const val VERSION = 1
+
+        /** What launchers before the manifest put in files they owned. */
+        const val LEGACY_MARKER = "omalauncher managed"
+
+        fun hash(file: File): String? = if (file.isFile) sha256(file.readBytes()) else null
+
+        fun sha256(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+    }
+}
+
+/**
+ * Replaces [file] in one rename, so a process reading or exec'ing it (a
+ * running guest) never sees it half written.
+ */
+fun writeAtomically(
+    file: File,
+    bytes: ByteArray,
+    executable: Boolean = false,
+) {
+    file.parentFile?.mkdirs()
+    val tmp = File(file.parentFile, ".${file.name}.tmp")
+    // Synced before the rename: after a power cut the file is the old one or the new one, never empty.
+    tmp.outputStream().use {
+        it.write(bytes)
+        it.fd.sync()
+    }
+    if (executable) tmp.setExecutable(true, false)
+    if (!tmp.renameTo(file)) {
+        tmp.delete()
+        error("can't replace $file")
+    }
+}

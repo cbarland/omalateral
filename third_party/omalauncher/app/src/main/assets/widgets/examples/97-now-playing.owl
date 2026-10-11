@@ -1,0 +1,57 @@
+widget "now playing" {
+  page: 1
+  order: 20
+  size: 6x2
+  minSize: 3x2
+
+  meta { description: "What's playing on the phone, with album art and play, pause and skip."; version: "1.0"; license: "MIT" }
+
+  // Android's media sessions: updates on its own, no shell involved.
+  source m = android.media
+
+  let wide = cols == null || cols >= 5
+
+  onTap: media("open")
+
+  if !m.available {
+    Column {
+      justify: center
+      fill: true
+      Text { text: "now playing"; style: muted }
+      Text { text: "needs notification access to see media"; style: small }
+      Button { text: "allow"; onTap: media("toggle") }
+    }
+  } else if m.title == null {
+    Column {
+      justify: center
+      fill: true
+      Text { text: "now playing"; style: muted }
+      Text { text: "nothing playing"; style: small }
+    }
+  } else {
+    Row {
+      gap: 12
+      fill: true
+      if wide && m.art != null {
+        Image { src: m.art; fit: cover; size: 72; radius: 4; clip: true }
+      }
+      Column {
+        gap: 4
+        weight: 1
+        Text { text: m.title; bold: true; maxLines: 1 }
+        Text { text: m.artist ?? m.app; style: small; color: muted; maxLines: 1 }
+        if m.duration != null {
+          Progress { value: m.position; max: m.duration; height: 3; fill: width; animate value: tween(900ms, "linear") }
+          Text { text: "${fmtDuration(m.position)} / ${fmtDuration(m.duration)}"; style: label }
+        }
+      }
+      Row {
+        gap: 4
+        width: 108
+        Button { text: "<<"; onTap: media("previous") }
+        Button { text: m.playing ? "||" : ">"; color: accent; onTap: media("toggle") }
+        Button { text: ">>"; onTap: media("next") }
+      }
+    }
+  }
+}

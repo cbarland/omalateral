@@ -12,17 +12,14 @@ import com.lateral.InputSettings
 import java.util.WeakHashMap
 
 internal const val OMARCHY_WINDOW_BORDER_DP = 2
-private val WINDOW_INTERIOR = Color.rgb(12, 14, 15)
-private val INACTIVE_BORDER = Color.argb(0xAA, 0x59, 0x59, 0x59)
-
 /** Omarchy-style 2px frame: a single accent color when focused, muted gray otherwise. */
 internal fun omarchyWindowBorder(focused: Boolean, borderPx: Int): Drawable {
     val outer = if (focused) {
         ColorDrawable(InputSettings.accentColor)
     } else {
-        ColorDrawable(INACTIVE_BORDER)
+        ColorDrawable(Color.argb(0xAA, Color.red(InputSettings.theme.muted), Color.green(InputSettings.theme.muted), Color.blue(InputSettings.theme.muted)))
     }
-    val inner = GradientDrawable().apply { setColor(WINDOW_INTERIOR) }
+    val inner = GradientDrawable().apply { setColor(InputSettings.theme.darkerBackground) }
     return LayerDrawable(arrayOf(outer, inner)).apply {
         setLayerInset(1, borderPx, borderPx, borderPx, borderPx)
     }
@@ -60,7 +57,7 @@ internal fun TextView.installBeastHover(normalColor: (() -> Int)? = null) {
 }
 
 private fun beastHoverBackground(view: View) = GradientDrawable().apply {
-    setColor(Color.rgb(28, 35, 36))
+    setColor(InputSettings.theme.lighterBackground)
     setStroke(
         view.resources.displayMetrics.density.toInt().coerceAtLeast(1),
         InputSettings.accentOutlineColor(),
@@ -77,7 +74,7 @@ internal fun updateBeastHover(view: View, hovered: Boolean) {
     state.hovered = hovered
     if (hovered) {
         view.background = beastHoverBackground(view)
-        state.textColors.forEach { (text, _) -> text.setTextColor(Color.WHITE) }
+        state.textColors.forEach { (text, _) -> text.setTextColor(InputSettings.theme.brightForeground) }
         view.alpha = 1f
     } else {
         view.background = state.normalBackground

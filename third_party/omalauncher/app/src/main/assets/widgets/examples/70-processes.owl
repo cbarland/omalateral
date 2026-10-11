@@ -1,0 +1,30 @@
+widget "processes" {
+  page: 2
+  order: 3
+  size: 3x5
+  minSize: 3x2
+
+  requires { pacman: ["procps-ng", "btop"] }
+
+  source top = cmd('ps -eo rss=,comm= --sort=-rss | head -6') every 10s
+  // "  81234 firefox" -> {mem: bytes, name: "firefox"}
+  let procs = lines(top).map(l => { mem: num(words(l)[0]) * 1024, name: words(l)[1] })
+  let biggest = max(procs.map(p => p.mem))
+
+  onTap: terminal("btop")
+
+  Column {
+    gap: 6
+    Text { text: "top memory"; style: muted }
+    for p in procs key p.name {
+      Column {
+        gap: 2
+        Row {
+          Text { text: p.name; fontSize: 12; maxLines: 1; weight: 1 }
+          Text { text: fmtBytes(p.mem); fontSize: 12; color: muted; width: 48; align: end }
+        }
+        Progress { value: p.mem; max: biggest; height: 2; fill: width; animate value: spring() }
+      }
+    }
+  }
+}

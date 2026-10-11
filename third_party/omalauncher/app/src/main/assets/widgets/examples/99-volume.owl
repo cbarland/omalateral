@@ -1,0 +1,21 @@
+widget "volume" {
+  page: 3
+  order: 5
+  size: 6x1
+  minSize: 4x1
+
+  meta { owl: 4; description: "The phone's media volume as a slider, with a mute button."; version: "1.0"; license: "MIT"; category: "system" }
+
+  // Follows the hardware buttons and other apps as well.
+  source v = android.volume
+
+  Row {
+    gap: 10
+    fill: true
+    Text { text: "vol"; style: label; width: 28 }
+    // One step per volume step of the phone; live sets the volume while dragging.
+    Slider { value: v.muted ? 0 : v.level; step: 100 / v.steps; live: true; weight: 1; onChange: volume(value) }
+    Text { text: v.muted ? "muted" : "${v.level}%"; style: small; width: 48; align: end }
+    Button { text: v.muted ? "on" : "off"; color: muted; onTap: volume("toggle") }
+  }
+}

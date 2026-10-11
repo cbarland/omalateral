@@ -1,0 +1,1 @@
+The app list now lives in the bar, with a strip of recently used apps above it on home. Widgets can open full screen, and there's a new breathing exercise widget. Store previews show in your theme. Fixes for many crashes caused by widgets, Linux apps and uninstalled apps.

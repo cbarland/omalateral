@@ -1,0 +1,62 @@
+package dev.omalauncher.ui
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class AppSearchTest {
+    private val apps = listOf("Firefox", "Visual Studio Code", "Files", "Claude Code", "Settings", "btop", "Calculator", "Calendar")
+
+    private fun top(query: String) = rankMatches(apps, query, { it }).firstOrNull()
+
+    private fun opensApp(query: String) = top(query)?.let { isStrongMatch(it.second, query) } == true
+
+    @Test fun prefixOpensApp() {
+        assertEquals("Firefox", top("fire")?.first)
+        assertTrue(opensApp("fire"))
+    }
+
+    @Test fun initialsOpenApp() {
+        assertEquals("Visual Studio Code", top("vsc")?.first)
+        assertTrue(opensApp("vsc"))
+    }
+
+    @Test fun wordPrefixOpensApp() {
+        assertEquals("Visual Studio Code", top("studio")?.first)
+        assertTrue(opensApp("claude code"))
+    }
+
+    @Test fun sentencesGoToTheAgent() {
+        assertFalse(opensApp("fix my wifi"))
+        assertFalse(opensApp("why is the build failing"))
+    }
+
+    @Test fun weakMatchesShowButDontOpen() {
+        // A subsequence still lists Firefox, but Enter asks the agent.
+        assertEquals("Firefox", top("ffx")?.first)
+        assertFalse(opensApp("ffx"))
+    }
+
+    @Test fun exactBeatsPrefixAndShorterWins() {
+        assertEquals("Files", top("fi")?.first)
+        assertEquals("Files", top("files")?.first)
+        assertEquals("Calendar", rankMatches(apps + "Cal", "calendar", { it }).first().first)
+    }
+
+    @Test fun boostReordersWithinATier() {
+        val ranked = rankMatches(apps, "cal", { it }, boost = { if (it == "Calendar") 50 else 0 })
+        assertEquals("Calendar", ranked.first().first)
+    }
+
+    @Test fun boostNeverCrossesTiers() {
+        // "co" starts a word of both Code apps but is only a subsequence of Calculator.
+        val ranked = rankMatches(apps, "co", { it }, boost = { if (it == "Calculator") 99 else 0 })
+        assertEquals("Calculator", ranked.last().first)
+    }
+
+    @Test fun noMatchIsEmpty() {
+        assertTrue(rankMatches(apps, "zzz", { it }).isEmpty())
+        assertTrue(rankMatches(apps, "  ", { it }).isEmpty())
+    }
+}

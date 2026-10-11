@@ -19,7 +19,7 @@ class WorkspaceViewportSliderView(context: Context) : View(context) {
 
     init {
         isClickable = true
-        setBackgroundColor(Color.rgb(9, 10, 11))
+        setBackgroundColor(InputSettings.theme.darkBackground)
     }
 
     fun setViewportPosition(position: Float) {
@@ -38,7 +38,7 @@ class WorkspaceViewportSliderView(context: Context) : View(context) {
         val thumbLeft = side + available * viewportOffset
 
         paint.style = Paint.Style.FILL
-        paint.color = Color.rgb(31, 42, 43)
+        paint.color = InputSettings.theme.muted
         canvas.drawRect(side, trackY - dp(1), trackEnd, trackY + dp(1), paint)
 
         paint.color = InputSettings.accentColor
@@ -61,7 +61,7 @@ class WorkspaceViewportSliderView(context: Context) : View(context) {
         paint.color = InputSettings.accentColor
         canvas.drawText("BEAST VIEW", width / 2f, height - dp(3).toFloat(), paint)
 
-        paint.color = Color.rgb(37, 48, 49)
+        paint.color = InputSettings.theme.lighterBackground
         canvas.drawRect(0f, 0f, width.toFloat(), dp(1).toFloat(), paint)
     }
 

@@ -1,0 +1,23 @@
+widget "agents" {
+  page: 2
+  order: 2
+  size: 3x5
+  minSize: 3x3
+
+  source installed = cmd("for a in claude opencode codex grok crush; do command -v $a >/dev/null && printf '%s ' $a; done") every 5m
+
+  Column {
+    gap: 6
+    Text { text: "coding agents"; style: muted }
+    if len(words(installed)) == 0 {
+      Text { text: "none installed yet"; style: small }
+    }
+    Flow {
+      gap: 6
+      for agent in words(installed) {
+        Button { text: agent; onTap: terminal(agent) }
+      }
+    }
+    Button { text: "manage"; color: muted; onTap: launcher("agents") }
+  }
+}

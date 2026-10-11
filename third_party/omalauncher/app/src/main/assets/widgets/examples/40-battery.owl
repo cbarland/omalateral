@@ -1,0 +1,24 @@
+widget "battery" {
+  page: 1
+  order: 4
+  size: 3x2
+  minSize: 3x2
+
+  source bat = android.battery every 60s
+  let low = bat.level < 20
+
+  Row {
+    gap: 12
+    Ring {
+      value: bat.level; max: 100; size: 56; thickness: 6
+      color: low ? red : green
+      animate value: spring()
+    }
+    Column {
+      weight: 1
+      Text { text: "battery"; style: muted }
+      Text { text: "${bat.level}%"; style: title; color: low ? red : green }
+      Text { text: bat.status; style: small }
+    }
+  }
+}

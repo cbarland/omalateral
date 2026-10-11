@@ -1,0 +1,58 @@
+widget "notifications" {
+  page: 3
+  order: 4
+  size: 6x4
+  minSize: 3x2
+
+  meta { owl: 4; description: "The phone's notifications: tap one to open it, x to clear it."; version: "1.0"; license: "MIT"; category: "productivity" }
+
+  // Android's notification shade, updated as notifications come and go. No shell involved.
+  source n = android.notifications
+
+  if !n.available {
+    Column {
+      justify: center
+      fill: true
+      Text { text: "notifications"; style: muted }
+      Text { text: "needs notification access"; style: small }
+      // Without access, any notification(...) opens the setting that grants it.
+      Button { text: "allow"; onTap: notification("open", "") }
+    }
+  } else {
+    Column {
+      gap: 6
+      fill: true
+      Row {
+        Text { text: "notifications"; style: muted; weight: 1 }
+        Text { text: n.count; style: muted; width: 40; align: end }
+      }
+      if n.count == 0 {
+        Text { text: "all clear"; style: small }
+      }
+      Column {
+        gap: 8
+        weight: 1
+        scroll: true
+        for item in n.items key item.key {
+          Row {
+            gap: 8
+            align: top
+            Column {
+              gap: 0
+              weight: 1
+              onTap: notification("open", item.key)
+              Text { text: "${item.app} · ${fmtTime(item.time, "HH:mm")}"; style: label; maxLines: 1 }
+              Text { text: item.title; bold: true; maxLines: 1 }
+              if item.text != "" {
+                Text { text: item.text; style: small; maxLines: 2 }
+              }
+            }
+            if item.clearable {
+              Button { text: "x"; color: muted; onTap: notification("dismiss", item.key) }
+            }
+          }
+        }
+      }
+    }
+  }
+}

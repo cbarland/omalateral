@@ -1,0 +1,29 @@
+widget "analog clock" {
+  page: 3
+  order: 1
+  size: 3x3
+  minSize: 2x2
+
+  source now = clock every 1s
+  let h = num(fmtTime(now, "H"))
+  let m = num(fmtTime(now, "m"))
+  let s = num(fmtTime(now, "s"))
+
+  // Drawing happens in dp; 0 degrees is 12 o'clock and angles run clockwise.
+  Canvas {
+    let cx = width / 2
+    let cy = height / 2
+    let r = min(width, height) / 2 - 4
+
+    circle(cx, cy, r, stroke: border, width: 2)
+    for i in range(12) {
+      rotate(i * 30, cx, cy) {
+        line(cx, cy - r + 4, cx, cy - r + (i % 3 == 0 ? 14 : 9), stroke: i % 3 == 0 ? foreground : muted, width: 2, cap: round)
+      }
+    }
+    rotate((h % 12 + m / 60) * 30, cx, cy) { line(cx, cy, cx, cy - r * 0.5, stroke: foreground, width: 5, cap: round) }
+    rotate((m + s / 60) * 6, cx, cy) { line(cx, cy, cx, cy - r * 0.75, stroke: foreground, width: 3, cap: round) }
+    rotate(s * 6, cx, cy) { line(cx, cy + r * 0.15, cx, cy - r * 0.85, stroke: red, width: 1.5, cap: round) }
+    circle(cx, cy, 4, fill: accent)
+  }
+}

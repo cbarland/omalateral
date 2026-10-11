@@ -1,0 +1,75 @@
+Privacy Policy
+
+Effective Date: 10.10.2026
+
+Omalauncher ("the App") is an Android home screen launcher developed by Simon Schubert ("we," "us," or "our"). This Privacy Policy explains how the App handles information.
+
+1. Information We Do Not Collect
+
+The App does not collect, store, or transmit any personal data to our servers. We do not:
+- Require you to create an account or log in.
+- Track your usage with analytics or crash reporting tools.
+- Show ads or use advertising identifiers.
+- Collect device identifiers.
+- Operate any servers that receive your data.
+
+2. Local Data Storage
+
+Your home screen layout, widgets, theme settings and, if you install it, the Linux environment and its files are stored only on your device. Uninstalling the App deletes all of it. Removing Linux in the App's settings deletes the Linux environment and its files.
+
+3. Device Permissions
+
+- Microphone (optional): used only while you hold or tap the microphone button to dictate a prompt. Speech is recognized by your phone's speech recognition service (on the device where the phone supports it), and only the resulting text is passed to the app you are talking to. The App does not record or store audio.
+- Notification access (optional): lets media widgets show and control what is currently playing, and lets widgets you add show your notifications (app name, title and text) and open or dismiss them. Notifications are read on your device, only when a widget on your home screen asks for them, and are not stored or sent to us. A widget you add could send what it shows to a service it contacts; each widget's page in the widget store shows what it runs and which addresses it contacts.
+- Uninstalling apps: used only when you choose to uninstall an app from the app drawer. Android asks you to confirm every uninstall.
+- Internet: used to download the content listed in section 4.
+
+4. Third-Party Services
+
+The App connects to the following services. Each request reveals your IP address to that service, which handles it under its own privacy policy.
+
+GitHub (github.com, raw.githubusercontent.com, codeload.github.com, simonschubert.github.io)
+- Downloads Omarchy themes and wallpapers, the widget store catalog and widgets, and the cliamp music player.
+- Privacy Policy: https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement
+
+dpaste.com (sharing widgets)
+- Only when you choose to share a widget that is too big for one QR code, or to submit your own widget to the widget store, the widget's text is uploaded to dpaste.com as a public paste that anyone with the link can read. It is deleted after 7 days, or after one year for a store submission. Opening a shared link that points to dpaste.com downloads the widget from there.
+- Widgets shared as a QR code or link without dpaste.com carry the whole widget in the link itself and are not uploaded anywhere.
+
+wttr.in (weather widget)
+- The weather widget requests the current weather. wttr.in estimates your approximate location from your IP address.
+
+Widgets
+- Widgets you add from the widget store may contact other services to show their content (for example prices, news feeds or radio streams). Each widget's page in the store shows what it runs and which addresses it contacts.
+
+Optional Linux environment
+- Only if you choose to install Linux, the App downloads Arch Linux ARM from archlinuxarm.org and its mirrors. Packages you install come from Arch Linux ARM mirrors and, if you choose, the Arch User Repository (aur.archlinux.org).
+
+Optional coding agents
+- Only if you choose to install a coding agent (for example Claude Code, Codex or OpenCode), it is downloaded from its vendor. The prompts you send to an agent, and the files it works with, are sent to that agent's provider under the provider's own terms and privacy policy. You sign in to each agent with your own account.
+
+We do not share any data with third parties ourselves.
+
+5. Children's Privacy
+
+The App is not intended for children under 13 years of age. We do not knowingly process data from children.
+
+6. GDPR Compliance (European Users)
+
+As the developer is based in Berlin, Germany, we comply with the General Data Protection Regulation (GDPR) where applicable:
+- Local storage: all data the App stores stays on your device and is under your control.
+- Permissions: microphone and notification access are optional and require your explicit consent.
+- Third-party requests: requests to the services in section 4 are made only to provide the features you use.
+
+7. Your Rights
+
+You can:
+- Revoke microphone and notification access at any time in your device settings.
+- Remove Linux and its files in the App's settings.
+- Remove widgets from your home screen.
+- Choose not to share widgets through dpaste.com; pastes expire on their own after 7 days or one year.
+- Delete all App data by uninstalling the App.
+
+8. Changes to This Privacy Policy
+
+We may update this Privacy Policy from time to time. Any changes will be posted here with an updated effective date.

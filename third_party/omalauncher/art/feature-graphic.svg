@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="500" viewBox="0 0 1024 500">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#24283B"/><stop offset="1" stop-color="#16161E"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.42" cy="0.40" r="0.55">
+      <stop offset="0" stop-color="#7AA2F7" stop-opacity="0.22"/><stop offset="1" stop-color="#7AA2F7" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="border" gradientUnits="userSpaceOnUse" x1="30" y1="30" x2="54" y2="78">
+      <stop offset="0" stop-color="#33CCFF"/><stop offset="1" stop-color="#00FF99"/>
+    </linearGradient>
+    <linearGradient id="violet" gradientUnits="userSpaceOnUse" x1="56" y1="56" x2="78" y2="78">
+      <stop offset="0" stop-color="#BB9AF7"/><stop offset="1" stop-color="#7AA2F7"/>
+    </linearGradient>
+    <linearGradient id="fbg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#24283B"/><stop offset="1" stop-color="#13131A"/>
+    </linearGradient>
+    <radialGradient id="fglow" cx="0.22" cy="0.45" r="0.5">
+      <stop offset="0" stop-color="#7AA2F7" stop-opacity="0.20"/><stop offset="1" stop-color="#7AA2F7" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wm" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#33CCFF"/><stop offset="1" stop-color="#00FF99"/>
+    </linearGradient>
+    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.2" fill="#C0CAF5" fill-opacity="0.06"/>
+    </pattern>
+  </defs>
+  <rect width="1024" height="500" fill="url(#fbg)"/>
+  <rect width="1024" height="500" fill="url(#dots)"/>
+  <rect width="1024" height="500" fill="url(#fglow)"/>
+  <g transform="translate(44 26) scale(4.3)">
+      <path fill="url(#border)" fill-rule="evenodd" d="M34,30h16a4,4 0 0 1 4,4v40a4,4 0 0 1 -4,4h-16a4,4 0 0 1 -4,-4v-40a4,4 0 0 1 4,-4z M34.5,32.5h15a2,2 0 0 1 2,2v39a2,2 0 0 1 -2,2h-15a2,2 0 0 1 -2,-2v-39a2,2 0 0 1 2,-2z"/>
+      <path fill="#1A1B26" d="M34.5,32.5h15a2,2 0 0 1 2,2v39a2,2 0 0 1 -2,2h-15a2,2 0 0 1 -2,-2v-39a2,2 0 0 1 2,-2z"/>
+      <path fill="none" stroke="#C0CAF5" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" d="M37,49 L42,54 L37,59"/>
+      <path fill="#33CCFF" d="M44,57.2h4.2a1,1 0 0 1 1,1v0.6a1,1 0 0 1 -1,1h-4.2a1,1 0 0 1 -1,-1v-0.6a1,1 0 0 1 1,-1z"/>
+      <path fill="#414868" d="M60,30h14a4,4 0 0 1 4,4v14a4,4 0 0 1 -4,4h-14a4,4 0 0 1 -4,-4v-14a4,4 0 0 1 4,-4z"/>
+      <path fill="url(#violet)" d="M60,56h14a4,4 0 0 1 4,4v14a4,4 0 0 1 -4,4h-14a4,4 0 0 1 -4,-4v-14a4,4 0 0 1 4,-4z"/>
+  </g>
+  <text x="440" y="222" font-family="JetBrains Mono" font-weight="800" font-size="68" fill="#C0CAF5" letter-spacing="-1">omalauncher</text>
+  <rect x="444" y="246" width="96" height="6" rx="3" fill="url(#wm)"/>
+  <text x="442" y="306" font-family="JetBrains Mono" font-size="27" fill="#A9B1D6">Arch Linux on your home screen.</text>
+  <text x="442" y="346" font-family="JetBrains Mono" font-size="27" fill="#565F89">Tiled. Themed. Terminal-first.</text>
+</svg>

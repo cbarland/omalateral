@@ -29,7 +29,6 @@ class BeastUsbBootstrapUiAndroidTest {
         var beast: BeastActivity? = null
         var phone: MainActivity? = null
         var helperPid = ""
-        var helper: com.lateral.privileged.IPrivilegedService? = null
         try {
             val apk = context.applicationInfo.sourceDir
             val pipes = instrumentation.uiAutomation.executeShellCommandRw("sh")
@@ -46,13 +45,11 @@ class BeastUsbBootstrapUiAndroidTest {
             input.close()
             output.close()
             waitUntil("USB bootstrap READY") { PrivilegedService.bridgeTransport() == PrivilegedService.BridgeTransport.USB }
-            helper = PrivilegedService::class.java.getDeclaredField("service")
-                .apply { isAccessible = true }.get(PrivilegedService) as com.lateral.privileged.IPrivilegedService
             PrivilegedService.taskSnapshots().filter { it.packageName == instrumentation.context.packageName }
-                .forEach { helper!!.removeTask(it.taskId) }
+                .forEach { PrivilegedService.removeTask(it.taskId) }
             instrumentation.runOnMainSync {
                 WorkspaceState.closeAllCandidates().filter { it.packageName == instrumentation.context.packageName }.forEach {
-                    it.androidTaskId?.let { taskId -> helper!!.removeTask(taskId) }
+                    it.androidTaskId?.let { taskId -> PrivilegedService.removeTask(taskId) }
                     WorkspaceState.removeClosed(it.id)
                 }
             }
@@ -87,8 +84,8 @@ class BeastUsbBootstrapUiAndroidTest {
             // Use a real view touch sequence routed through Android's input dispatcher.
             tapView(checkNotNull(beast), checkNotNull(openApps))
             waitUntil("launcher opens") { launcher().visibility == View.VISIBLE }
-            tapView(checkNotNull(beast), checkNotNull(findTextView(launcher(), "× close")))
-            waitUntil("launcher closes") { launcher().visibility == View.GONE }
+            tapView(checkNotNull(beast), checkNotNull(findTextView(checkNotNull(beast).window.decorView, "+APPS")))
+            waitUntil("launcher closes, desktop stays visible") { launcher().translationZ == 0f && !LauncherSearchSession.active }
 
             instrumentation.uiAutomation.serviceInfo = instrumentation.uiAutomation.serviceInfo.apply {
                 flags = flags or android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
@@ -123,8 +120,8 @@ class BeastUsbBootstrapUiAndroidTest {
                     waitUntil("restore ${task.shortLabel} cycle $cycle") { !task.minimized && WorkspaceState.focusedTaskId == task.id }
                     tapView(checkNotNull(beast), checkNotNull(findTextView(checkNotNull(beast).window.decorView, "+APPS")))
                     waitUntil("launcher opens after restore") { launcher().visibility == View.VISIBLE }
-                    tapView(checkNotNull(beast), checkNotNull(findTextView(launcher(), "× close")))
-                    waitUntil("launcher dismisses") { launcher().visibility == View.GONE }
+                    tapView(checkNotNull(beast), checkNotNull(findTextView(checkNotNull(beast).window.decorView, "+APPS")))
+                    waitUntil("launcher dismisses") { launcher().translationZ == 0f && !LauncherSearchSession.active }
                     checkPhoneTouch()
                 }
             }
@@ -138,11 +135,13 @@ class BeastUsbBootstrapUiAndroidTest {
 
         } finally {
             PrivilegedService.taskSnapshots().filter { it.packageName == instrumentation.context.packageName }
-                .forEach { runCatching { helper?.removeTask(it.taskId) } }
-            instrumentation.runOnMainSync { WorkspaceState.closeAllCandidates().filter { it.packageName == instrumentation.context.packageName }.forEach { it.androidTaskId?.let { id -> runCatching { helper?.removeTask(id) } }; WorkspaceState.removeClosed(it.id) } }
+                .forEach { runCatching { PrivilegedService.removeTask(it.taskId) } }
+            instrumentation.runOnMainSync { WorkspaceState.closeAllCandidates().filter { it.packageName == instrumentation.context.packageName }.forEach { it.androidTaskId?.let { id -> runCatching { PrivilegedService.removeTask(id) } }; WorkspaceState.removeClosed(it.id) } }
             if (helperPid.matches(Regex("[0-9]+"))) shell("kill $helperPid")
-            phone?.finishAndRemoveTask()
-            beast?.finishAndRemoveTask()
+            instrumentation.runOnMainSync {
+                phone?.finishAndRemoveTask()
+                beast?.finishAndRemoveTask()
+            }
 
         }
     }
@@ -184,7 +183,11 @@ class BeastUsbBootstrapUiAndroidTest {
             }
         }
         if (activity is BeastActivity) {
-            if (!BeastInputRouter.click(activity.display!!.displayId, rect.centerX(), rect.centerY(), MotionEvent.BUTTON_PRIMARY)) {
+            var handled = false
+            instrumentation.runOnMainSync {
+                handled = BeastInputRouter.click(activity.display!!.displayId, rect.centerX(), rect.centerY(), MotionEvent.BUTTON_PRIMARY)
+            }
+            if (!handled) {
                 PrivilegedService.clickMouse(activity.display!!.displayId, rect.centerX(), rect.centerY(), MotionEvent.BUTTON_PRIMARY)
             }
         } else {

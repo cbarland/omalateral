@@ -74,12 +74,13 @@ class BeastLauncherDismissAndroidTest {
                 Thread.sleep(400)
             }
             fun closed() = await("launcher dismissed and modal ownership released") {
-                launcher().visibility == View.GONE && !LauncherSearchSession.active &&
+                launcher().visibility == View.VISIBLE && launcher().translationZ == 0f && !LauncherSearchSession.active &&
                     !TransientPanelCoordinator.isActiveOnDisplay(display.displayId)
             }
             fun closePoint(): Pair<Int, Int> {
                 var point = 0 to 0
-                instrumentation.runOnMainSync { point = center(checkNotNull(findText(launcher(), "× close"))) }
+                // The embedded home stays mounted; a toolbar click dismisses its modal panel.
+                instrumentation.runOnMainSync { point = center(checkNotNull(findText(beast.window.decorView, "+APPS"))) }
                 return point
             }
             open()
@@ -112,7 +113,7 @@ class BeastLauncherDismissAndroidTest {
                 val root = field<View>(beast, "root")
                 val bounds = Rect().also { root.getGlobalVisibleRect(it) }
                 assertTrue(BeastInputRouter.click(display.displayId, bounds.left + 5,
-                    bounds.centerY(), MotionEvent.BUTTON_PRIMARY))
+                    bounds.top + 1, MotionEvent.BUTTON_PRIMARY))
             }
             closed()
             open()
@@ -166,8 +167,10 @@ class BeastLauncherDismissAndroidTest {
             Thread.sleep(400)
             instrumentation.runOnMainSync {
                 assertEquals("old UP cannot close the replacement menu", View.VISIBLE, launcher().visibility)
-                assertTrue(BeastInputRouter.pinch(display.displayId, oldX, oldY, 1.5f))
-                assertTrue(BeastInputRouter.scroll(display.displayId, oldX, oldY, -1f))
+                assertTrue("Phone search retains modal ownership while Compose transitions", field<Boolean>(beast, "launcherActive"))
+                val (homeX, homeY) = center(launcher())
+                assertTrue(BeastInputRouter.pinch(display.displayId, homeX, homeY, 1.5f))
+                assertTrue(BeastInputRouter.scroll(display.displayId, homeX, homeY, -1f))
                 assertTrue("phone search provides a visible dismissal", field<View>(phone, "phoneProxyClose").isShown)
                 field<View>(phone, "phoneProxyClose").performClick()
             }

@@ -23,7 +23,7 @@ class WorkspaceNavigatorView(context: Context) : View(context) {
     private var tabDragRemainderPx = 0f
 
     init {
-        setBackgroundColor(Color.rgb(9, 10, 11))
+        setBackgroundColor(InputSettings.theme.darkBackground)
         isClickable = true
     }
 
@@ -33,7 +33,7 @@ class WorkspaceNavigatorView(context: Context) : View(context) {
             paint.typeface = android.graphics.Typeface.MONOSPACE
             paint.textAlign = Paint.Align.CENTER
             paint.textSize = dp(11).toFloat()
-            paint.color = Color.rgb(91, 104, 105)
+            paint.color = InputSettings.theme.muted
             canvas.drawText("NO TASKS — OPEN APPS", width / 2f, dp(30).toFloat(), paint)
             return
         }
@@ -49,10 +49,10 @@ class WorkspaceNavigatorView(context: Context) : View(context) {
                 paint.color = accent
                 canvas.drawRect(center - itemWidth / 2 + dp(5), dp(2).toFloat(), center + itemWidth / 2 - dp(5), dp(4).toFloat(), paint)
             }
-            paint.color = if (task.id == focusedTaskId) Color.rgb(232, 247, 248) else Color.rgb(142, 155, 156)
+            paint.color = if (task.id == focusedTaskId) InputSettings.theme.brightForeground else InputSettings.theme.darkForeground
             paint.textSize = dp(12).toFloat()
             canvas.drawText("%02d".format(tabOffset + index + 1), center, top + dp(15), paint)
-            paint.color = if (task.id == focusedTaskId) Color.rgb(164, 223, 229) else Color.rgb(98, 111, 112)
+            paint.color = if (task.id == focusedTaskId) InputSettings.theme.lightForeground else InputSettings.theme.muted
             paint.textSize = dp(11).toFloat()
             canvas.drawText(task.shortLabel.uppercase(), center, top + dp(31), paint)
         }

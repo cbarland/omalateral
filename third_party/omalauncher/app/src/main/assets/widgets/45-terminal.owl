@@ -1,0 +1,12 @@
+widget "terminal" {
+  page: 1
+  order: 5
+  size: 6x4
+  minSize: 2x2
+  padding: 0
+
+  meta { owl: 2 }
+
+  // A real shell in the tile. Tap it to type; tap outside it or press Back to let go.
+  Terminal { }
+}

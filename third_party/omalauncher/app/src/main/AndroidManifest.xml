@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Speech input for the agent prompt bar; only recognized text reaches Linux. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Uninstall from the app drawer's long-press menu (ACTION_DELETE). -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+
+    <uses-feature
+        android:name="android.software.live_wallpaper"
+        android:required="false" />
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <!-- Lets SpeechRecognizer find the phone's recognition service. -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".App"
+        android:extractNativeLibs="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="Omalauncher"
+        android:theme="@style/Theme.Omalauncher"
+        android:usesCleartextTraffic="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:clearTaskOnLaunch="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|density|uiMode"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:stateNotNeeded="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- A widget shared as a link or QR code: https://simonschubert.github.io/omarchy-widgets/w#owl1.<data> (widgets/market/Share.kt). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="simonschubert.github.io" android:pathPrefix="/omarchy-widgets/w" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".LinuxWindowActivity"
+            android:label="Linux"
+            android:theme="@style/Theme.Omalauncher.Window"
+            android:autoRemoveFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|density|uiMode"
+            android:documentLaunchMode="always"
+            android:exported="false"
+            android:resizeableActivity="true"
+            android:windowSoftInputMode="adjustResize|stateAlwaysHidden" />
+
+        <!-- Recents names a task after its activity's manifest label, so the common windows get their own. -->
+        <activity-alias
+            android:name=".TerminalWindow"
+            android:exported="false"
+            android:label="Terminal"
+            android:targetActivity=".LinuxWindowActivity" />
+
+        <activity-alias
+            android:name=".BtopWindow"
+            android:exported="false"
+            android:label="btop"
+            android:targetActivity=".LinuxWindowActivity" />
+
+        <!-- And each coding agent (Agent.windowAlias), with its logo: Recents shows the activity's icon too. -->
+        <activity-alias
+            android:name=".ClaudeWindow"
+            android:exported="false"
+            android:icon="@drawable/agent_claude"
+            android:label="Claude Code"
+            android:targetActivity=".LinuxWindowActivity" />
+
+        <activity-alias
+            android:name=".OpencodeWindow"
+            android:exported="false"
+            android:icon="@drawable/agent_opencode"
+            android:label="OpenCode"
+            android:targetActivity=".LinuxWindowActivity" />
+
+        <activity-alias
+            android:name=".CodexWindow"
+            android:exported="false"
+            android:icon="@drawable/agent_codex"
+            android:label="Codex"
+            android:targetActivity=".LinuxWindowActivity" />
+
+        <activity-alias
+            android:name=".GrokWindow"
+            android:exported="false"
+            android:icon="@drawable/agent_grok"
+            android:label="Grok"
+            android:targetActivity=".LinuxWindowActivity" />
+
+        <activity-alias
+            android:name=".CopilotWindow"
+            android:exported="false"
+            android:icon="@drawable/agent_copilot"
+            android:label="GitHub Copilot"
+            android:targetActivity=".LinuxWindowActivity" />
+
+        <activity-alias
+            android:name=".CrushWindow"
+            android:exported="false"
+            android:icon="@drawable/agent_crush"
+            android:label="Crush"
+            android:targetActivity=".LinuxWindowActivity" />
+
+        <activity-alias
+            android:name=".CursorAgentWindow"
+            android:exported="false"
+            android:icon="@drawable/agent_cursor_agent"
+            android:label="Cursor CLI"
+            android:targetActivity=".LinuxWindowActivity" />
+
+        <activity-alias
+            android:name=".AgyWindow"
+            android:exported="false"
+            android:icon="@drawable/agent_agy"
+            android:label="Antigravity"
+            android:targetActivity=".LinuxWindowActivity" />
+
+        <activity-alias
+            android:name=".PiWindow"
+            android:exported="false"
+            android:icon="@drawable/agent_pi"
+            android:label="Pi"
+            android:targetActivity=".LinuxWindowActivity" />
+
+        <activity
+            android:name=".FilesActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|density|uiMode"
+            android:exported="false"
+            android:label="Files"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:taskAffinity="dev.omalauncher.files"
+            android:theme="@style/Theme.Omalauncher.Window"
+            android:windowSoftInputMode="adjustResize" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="dev.omalauncher.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <service
+            android:name=".theme.OmarchyWallpaperService"
+            android:exported="true"
+            android:label="@string/wallpaper_label"
+            android:permission="android.permission.BIND_WALLPAPER">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/wallpaper" />
+        </service>
+
+        <!-- Notification access lets widgets show and control what's playing (android.media) and list notifications (android.notifications). -->
+        <service
+            android:name=".widgets.runtime.MediaListener"
+            android:exported="true"
+            android:label="Omalauncher widgets"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".LinuxService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Runs a user-started Linux environment and its display server" />
+        </service>
+    </application>
+</manifest>

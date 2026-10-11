@@ -1,0 +1,19 @@
+widget "clock" {
+  page: 1
+  order: 1
+  size: 6x3
+  minSize: 3x2
+
+  // clock ticks inside the launcher: no shell command needed
+  source now = clock every 1s
+  source theme = cmd('cat ~/.local/state/omarchy/current/theme.name 2>/dev/null || echo tokyo-night') every 60s
+
+  onTap: launcher("themes")
+
+  Column {
+    Text { text: fmtTime(now, "HH:mm"); style: huge; color: accent }
+    Text { text: fmtTime(now, "EEEE, d MMMM"); style: title }
+    Spacer { size: 8 }
+    Text { text: "omarchy · ${theme}"; style: muted }
+  }
+}

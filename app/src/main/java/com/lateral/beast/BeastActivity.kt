@@ -8,6 +8,7 @@ import android.app.Dialog
 import android.app.ActivityOptions
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.BroadcastReceiver
 import android.content.pm.ResolveInfo
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -76,7 +77,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         private const val APP_DECORATOR_HEIGHT_DP = 30
         private const val APP_DECORATOR_MIN_WIDTH_DP = 300
         private const val TAG = "Lateral/Beast"
-        private val BACKGROUND = Color.rgb(7, 8, 9)
+        private val BACKGROUND get() = InputSettings.theme.darkerBackground
         private val ACCENT get() = InputSettings.accentColor
         private val activeInstances = AtomicInteger(0)
         private val resumedInstances = AtomicInteger(0)
@@ -126,6 +127,56 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private lateinit var viewportMap: ViewportMapView
     private lateinit var fullscreenLayer: FrameLayout
     private lateinit var launcher: FrameLayout
+    private var omaDesktop: DesktopSession? = null
+    private var sharedDesktop = false
+    private var omalauncherPresence = OmalauncherPresence.ABSENT
+    private var presenceReceiverRegistered = false
+    private val presenceReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.data?.schemeSpecificPart == OmalauncherPresence.PACKAGE) refreshOmalauncherPresence()
+        }
+    }
+
+    private fun refreshOmalauncherPresence() {
+        val next = OmalauncherPresence.detect(this)
+        if (next == omalauncherPresence) return
+        omalauncherPresence = next
+        if (::toolbar.isInitialized) renderToolbar()
+    }
+
+    private fun showCompanionStatus() {
+        val message = if (sharedDesktop) "Connected to an authorized external Omalauncher desktop session." else when (omalauncherPresence) {
+            OmalauncherPresence.ABSENT -> "Using omalateral's embedded Omalauncher desktop. Its widgets, settings and optional Linux installation are local to omalateral."
+            OmalauncherPresence.DISABLED -> "Standalone Omalauncher is disabled. Using omalateral's separate embedded desktop."
+            OmalauncherPresence.BRIDGE_REQUIRED -> "Using omalateral's embedded desktop. Your installed Omalauncher is separate and unchanged. Sharing its Linux environment, agents and widgets requires a future bridge update in both apps."
+        }
+        android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show()
+    }
+    private var launcherActive = false
+    private var desktopFocused = true
+    private var routedLauncherOutside = false
+    private var nativeLauncherOutside = false
+
+    private fun windowAt(x: Int, y: Int): Boolean = cards.values.any { card ->
+        val bounds = Rect()
+        card.isShown && card.getGlobalVisibleRect(bounds) && bounds.contains(x, y)
+    }
+
+    private fun desktopAt(x: Int, y: Int): Boolean {
+        val bounds = Rect()
+        return ::launcher.isInitialized && launcher.isShown && launcher.getGlobalVisibleRect(bounds) && bounds.contains(x, y) &&
+            (launcherActive || !windowAt(x, y))
+    }
+
+    private fun setLauncherActive(active: Boolean) {
+        launcherActive = active
+        if (!::launcher.isInitialized) return
+        if (omaDesktop == null) launcher.visibility = if (active) View.VISIBLE else View.GONE
+        // The home screen stays mounted below windows. Only its menus rise above them.
+        launcher.translationZ = if (active) 1f else 0f
+        if (active) desktopFocused = true
+        if (::cursorOverlay.isInitialized) cursorOverlay.translationZ = 2f
+    }
     private lateinit var launcherPanel: LinearLayout
     private lateinit var launcherQuery: EditText
     private lateinit var launcherResults: LinearLayout
@@ -182,7 +233,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private val stateListener: () -> Unit = {
         runOnUiThread {
             renderWorkspace(WorkspaceState.consumeRevealFocusedTaskRequest())
-            if (::launcher.isInitialized && launcher.visibility == View.VISIBLE) {
+            if (::launcher.isInitialized && launcherActive && omaDesktop == null) {
                 populateLauncher(launcherQuery.text.toString())
             }
         }
@@ -199,11 +250,16 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         runOnUiThread {
             if (!::launcher.isInitialized) return@runOnUiThread
             if (!LauncherSearchSession.active) {
-                if (launcher.visibility == View.VISIBLE) hideLauncher()
+                if (launcherActive) hideLauncher()
                 return@runOnUiThread
             }
-            if (launcher.visibility != View.VISIBLE) return@runOnUiThread
+            if (!launcherActive) return@runOnUiThread
             val query = LauncherSearchSession.query
+            if (omaDesktop != null) {
+                omaDesktop?.search(query, launcherSubmitSequence != LauncherSearchSession.submitSequence)
+                launcherSubmitSequence = LauncherSearchSession.submitSequence
+                return@runOnUiThread
+            }
             if (launcherQuery.text.toString() != query) {
                 launcherQuery.setText(query)
                 launcherQuery.setSelection(launcherQuery.text.length)
@@ -331,11 +387,11 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         ) {
             restoreWorkspaceFocus()
         } else {
-            // Startup is the populated taskbar/workspace. The launcher is an explicit
-            // surface opened by +apps, never the default.
+            // Restore existing windows over the persistent Omalauncher home screen.
             restoreWorkspaceFocus()
         }
         if (PrivilegedService.state == PrivilegedService.State.READY) syncAndroidTasks()
+        omaDesktop?.visible(true)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -348,6 +404,10 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     override fun onDestroy() {
+        if (presenceReceiverRegistered) unregisterReceiver(presenceReceiver)
+        desktopLongPress.cancel()
+        omaDesktop?.close()
+        omaDesktop = null
         PhoneView.removeListener(phoneViewListener)
         if (phoneViewTaskId == taskId) phoneViewTaskId = -1
         if (::root.isInitialized) root.removeCallbacks(systemStatusTicker)
@@ -390,6 +450,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     override fun onResume() {
         super.onResume()
+        refreshOmalauncherPresence()
         visibleDisplayId = display?.displayId ?: -1
         if (!countedResumed) {
             countedResumed = true
@@ -400,6 +461,15 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         root.removeCallbacks(resumeGeometryRefresh)
         root.post(resumeGeometryRefresh)
         AndroidTaskSynchronizer.requestImmediate()
+        omaDesktop?.visible(true)
+    }
+
+    override fun onStop() {
+        desktopLongPress.cancel()
+        nativeDesktopSecondary = false
+        secondaryCancelled = true
+        omaDesktop?.visible(false)
+        super.onStop()
     }
 
     override fun onPause() {
@@ -454,6 +524,19 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (omaDesktop == null && event.isMetaPressed && event.action == KeyEvent.ACTION_DOWN &&
+            event.keyCode in listOf(KeyEvent.KEYCODE_SPACE, KeyEvent.KEYCODE_A)) {
+            showLauncher()
+            return true
+        }
+        if (omaDesktop != null && event.isMetaPressed && event.action == KeyEvent.ACTION_DOWN &&
+            event.keyCode in listOf(KeyEvent.KEYCODE_SPACE, KeyEvent.KEYCODE_A, KeyEvent.KEYCODE_ENTER)) {
+            setLauncherActive(true)
+        }
+        if (launcherActive || (omaDesktop != null && desktopFocused)) {
+            if (omaDesktop?.key(event) == true) return true
+            if (event.keyCode != KeyEvent.KEYCODE_ESCAPE) return super.dispatchKeyEvent(event)
+        }
         if (phoneViewSession && event.isCtrlPressed &&
             (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
                 event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)
@@ -466,17 +549,17 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             // Consume DOWN, repeats, and UP so the hosted app never receives a partial chord.
             return true
         }
-        if (phoneViewSession && launcher.visibility != View.VISIBLE &&
+        if (phoneViewSession && !launcherActive &&
             !TransientPanelCoordinator.isActiveOnDisplay(Display.DEFAULT_DISPLAY) &&
             event.keyCode !in setOf(KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_HOME, KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN)
         ) {
             cards[WorkspaceState.focusedTaskId]?.let { if (it.sendNativeKey(event)) return true }
         }
-        if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_ESCAPE && launcher.visibility == View.VISIBLE) {
+        if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_ESCAPE && launcherActive) {
             hideLauncher()
             return true
         }
-        if (!phoneViewSession && launcher.visibility != View.VISIBLE && event.action == KeyEvent.ACTION_DOWN) {
+        if (!phoneViewSession && !launcherActive && event.action == KeyEvent.ACTION_DOWN) {
             cards[WorkspaceState.focusedTaskId]?.let { if (it.sendKey(event.keyCode)) return true }
         }
         return super.dispatchKeyEvent(event)
@@ -484,7 +567,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
-        if (::launcher.isInitialized && launcher.visibility == View.VISIBLE) {
+        if (::launcher.isInitialized && launcherActive) {
             hideLauncher()
         } else if (phoneViewSession) {
             PhoneView.setEnabled(this, false)
@@ -502,9 +585,52 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private var routedLauncherLease: TransientPanelCoordinator.Lease? = null
     private var routedLauncherButton = 0
     private var routedLauncherDownAt = 0L
+    private val desktopLongPress = DesktopLongPress()
+    private var nativeDesktopSecondary = false
+    private var secondaryDownX = 0
+    private var secondaryDownY = 0
+    private var secondaryCancelled = false
+
+    private fun longPressDesktop(x: Int, y: Int) {
+        val capturedRoot = root
+        val capturedDesktop = launcher
+        val capturedLease = launcherLease
+        desktopFocused = true
+        desktopLongPress.start(capturedRoot, x, y) {
+            root === capturedRoot && launcher === capturedDesktop && launcherLease === capturedLease &&
+                !isFinishing && !isDestroyed && capturedDesktop.isShown && desktopAt(x, y) &&
+                (launcherActive || !TransientPanelCoordinator.isActiveOnDisplay(display?.displayId ?: -1))
+        }
+    }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (nativeLauncherOutside || (event.actionMasked == MotionEvent.ACTION_DOWN &&
+                launcherActive && !desktopAt(event.rawX.toInt(), event.rawY.toInt()))) {
+            nativeLauncherOutside = true
+            routeAppPointer(display?.displayId ?: -1, event.rawX.toInt(), event.rawY.toInt(),
+                event.actionMasked, MotionEvent.BUTTON_PRIMARY, event.buttonState)
+            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                nativeLauncherOutside = false
+            }
+            return true
+        }
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            desktopLongPress.cancel()
+            desktopFocused = desktopAt(event.rawX.toInt(), event.rawY.toInt())
+        }
         if (event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
+            val secondaryDown = event.actionMasked == MotionEvent.ACTION_DOWN &&
+                event.buttonState == MotionEvent.BUTTON_SECONDARY && desktopFocused &&
+                (launcherActive || !TransientPanelCoordinator.isActiveOnDisplay(display?.displayId ?: -1))
+            if (nativeDesktopSecondary || secondaryDown) {
+                nativeDesktopSecondary = true
+                routeAppPointer(display?.displayId ?: -1, event.rawX.toInt(), event.rawY.toInt(),
+                    event.actionMasked, MotionEvent.BUTTON_SECONDARY, event.buttonState)
+                if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                    nativeDesktopSecondary = false
+                }
+                return true
+            }
             if (event.actionMasked == MotionEvent.ACTION_DOWN && event.buttonState == MotionEvent.BUTTON_PRIMARY) {
                 // Native mouse DOWN can be consumed by either HorizontalScrollView.
                 // Hover targets are shell-owned controls only; hosted app surfaces are
@@ -548,6 +674,13 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        // Android sends these between mouse DOWN/UP. The captured stream owns them;
+        // forwarding them to Compose would create a second, unmatched pointer stream.
+        if (nativeDesktopSecondary && event.actionMasked in setOf(
+                MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_BUTTON_RELEASE)) return true
+        if (::launcher.isInitialized && desktopAt(event.rawX.toInt(), event.rawY.toInt())) {
+            return super.dispatchGenericMotionEvent(event)
+        }
         if (event.actionMasked == MotionEvent.ACTION_SCROLL &&
             event.isFromSource(android.view.InputDevice.SOURCE_CLASS_POINTER)
         ) {
@@ -556,7 +689,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
                 // Give the view under the rendered cursor first refusal. A task
                 // TextureView forwards the wheel into its VirtualDisplay; empty
                 // workspace and launcher areas fall back to shell navigation.
-                if (launcher.visibility != View.VISIBLE && super.dispatchGenericMotionEvent(event)) {
+                if (!launcherActive && super.dispatchGenericMotionEvent(event)) {
                     return true
                 }
                 scrollWorkspace(wheel)
@@ -588,7 +721,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     private fun findBeastHoverTarget(view: View, screenX: Int, screenY: Int): View? {
         // A modal overlay is a hit-test barrier, even where it has no hover control.
-        if (view === root && ::launcher.isInitialized && launcher.visibility == View.VISIBLE) {
+        if (view === root && ::launcher.isInitialized && launcherActive &&
+            desktopAt(screenX, screenY)) {
             return findBeastHoverTarget(launcher, screenX, screenY)
         }
         if (view.visibility != View.VISIBLE || view.alpha <= 0f || !view.isShown) return null
@@ -604,8 +738,21 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     override fun routeAppScroll(displayId: Int, x: Int, y: Int, amount: Float): Boolean {
         if (display?.displayId != displayId) return false
-        if (launcher.visibility == View.VISIBLE) {
-            scrollWorkspace(amount * InputSettings.scrollSensitivity)
+        if (!launcherActive && TransientPanelCoordinator.isActiveOnDisplay(displayId)) return false
+        if (desktopAt(x, y)) {
+            val properties = arrayOf(MotionEvent.PointerProperties().apply {
+                id = 0
+                toolType = MotionEvent.TOOL_TYPE_MOUSE
+            })
+            val coords = arrayOf(MotionEvent.PointerCoords().apply {
+                this.x = x.toFloat()
+                this.y = y.toFloat()
+                setAxisValue(MotionEvent.AXIS_VSCROLL, amount * InputSettings.scrollSensitivity)
+            })
+            val now = SystemClock.uptimeMillis()
+            val event = MotionEvent.obtain(now, now, MotionEvent.ACTION_SCROLL, 1, properties, coords,
+                0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_MOUSE, 0)
+            try { root.dispatchGenericMotionEvent(event) } finally { event.recycle() }
             return true
         }
         if (TransientPanelCoordinator.isActiveOnDisplay(displayId)) return false
@@ -614,19 +761,29 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     override fun routeAppPinch(displayId: Int, x: Int, y: Int, scale: Float): Boolean {
         if (display?.displayId != displayId) return false
-        if (launcher.visibility == View.VISIBLE) return true
+        if (!launcherActive && TransientPanelCoordinator.isActiveOnDisplay(displayId)) return false
+        if (desktopAt(x, y)) return true
         if (TransientPanelCoordinator.isActiveOnDisplay(displayId)) return false
         return cards.values.toList().asReversed().any { it.routePinchAt(x, y, scale) }
     }
 
     override fun routeAppClick(displayId: Int, x: Int, y: Int, button: Int): Boolean {
         if (display?.displayId != displayId) return false
-        if (launcher.visibility == View.VISIBLE) {
+        if (launcherActive && !desktopAt(x, y)) {
+            hideLauncher()
+            return true
+        }
+        if (!launcherActive && TransientPanelCoordinator.isActiveOnDisplay(displayId)) return false
+        desktopLongPress.cancel()
+        if (desktopAt(x, y)) {
+            desktopFocused = true
             if (button == MotionEvent.BUTTON_PRIMARY) {
                 val target = root
                 val downAt = SystemClock.uptimeMillis()
                 dispatchLauncherTouch(target, x, y, MotionEvent.ACTION_DOWN, downAt)
                 dispatchLauncherTouch(target, x, y, MotionEvent.ACTION_UP, downAt)
+            } else if (button == MotionEvent.BUTTON_SECONDARY) {
+                longPressDesktop(x, y)
             }
             return true
         }
@@ -637,6 +794,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             fullscreenExitForFocusedTask()?.performClick()
             return true
         }
+        desktopFocused = false
         return cards.values.toList().asReversed().any { it.routeClickAt(x, y, button) }
     }
 
@@ -651,9 +809,20 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         if (display?.displayId != displayId) return false
         routedLauncherRoot?.let { target ->
             // Consume the captured stream even if dismissal/rebuilding removes the view.
-            if (routedLauncherButton == MotionEvent.BUTTON_PRIMARY) {
-                if (target === root && routedLauncherView === launcher &&
-                    routedLauncherLease === launcherLease && launcher.visibility == View.VISIBLE) {
+            val valid = target === root && routedLauncherView === launcher &&
+                    routedLauncherLease === launcherLease && launcher.isShown &&
+                    (launcherActive || !TransientPanelCoordinator.isActiveOnDisplay(displayId))
+            if (routedLauncherOutside) {
+                if (valid && action == MotionEvent.ACTION_UP && !desktopAt(x, y)) hideLauncher()
+            } else if (routedLauncherButton == MotionEvent.BUTTON_SECONDARY) {
+                val slop = android.view.ViewConfiguration.get(this).scaledTouchSlop
+                if (!valid || kotlin.math.abs(x - secondaryDownX) > slop ||
+                    kotlin.math.abs(y - secondaryDownY) > slop) secondaryCancelled = true
+                if (action == MotionEvent.ACTION_UP && !secondaryCancelled && desktopAt(x, y)) {
+                    longPressDesktop(secondaryDownX, secondaryDownY)
+                }
+            } else if (routedLauncherButton == MotionEvent.BUTTON_PRIMARY) {
+                if (valid) {
                     dispatchLauncherTouch(target, x, y, action, routedLauncherDownAt)
                 } else {
                     dispatchLauncherTouch(target, x, y, MotionEvent.ACTION_CANCEL, routedLauncherDownAt)
@@ -664,10 +833,17 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
                 routedLauncherView = null
                 routedLauncherLease = null
                 routedLauncherButton = 0
+                routedLauncherOutside = false
             }
             return true
         }
-        if (launcher.visibility == View.VISIBLE) {
+        if (!launcherActive && TransientPanelCoordinator.isActiveOnDisplay(displayId)) return false
+        if (action == MotionEvent.ACTION_DOWN && (desktopAt(x, y) || launcherActive)) {
+            desktopLongPress.cancel()
+            secondaryDownX = x
+            secondaryDownY = y
+            secondaryCancelled = false
+            desktopFocused = true
             if (action == MotionEvent.ACTION_DOWN) {
                 routedPointerCard?.cancelRoutedPointer()
                 routedPointerCard = null
@@ -677,7 +853,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
                 routedLauncherLease = launcherLease
                 routedLauncherButton = button
                 routedLauncherDownAt = SystemClock.uptimeMillis()
-                if (button == MotionEvent.BUTTON_PRIMARY) {
+                routedLauncherOutside = !desktopAt(x, y)
+                if (button == MotionEvent.BUTTON_PRIMARY && !routedLauncherOutside) {
                     dispatchLauncherTouch(root, x, y, action, routedLauncherDownAt)
                 }
             }
@@ -685,6 +862,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         }
         if (TransientPanelCoordinator.isActiveOnDisplay(displayId)) return false
         if (action == MotionEvent.ACTION_DOWN) {
+            desktopLongPress.cancel()
+            desktopFocused = false
             routedPointerCard?.cancelRoutedPointer()
             routedPointerCard = null
             routedPointerButton = 0
@@ -754,6 +933,22 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun buildUi() {
+        desktopLongPress.cancel()
+        omaDesktop?.close()
+        omaDesktop = null
+        omalauncherPresence = OmalauncherPresence.detect(this)
+        if (!presenceReceiverRegistered) {
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_PACKAGE_ADDED)
+                addAction(Intent.ACTION_PACKAGE_REMOVED)
+                addAction(Intent.ACTION_PACKAGE_CHANGED)
+                addAction(Intent.ACTION_PACKAGE_REPLACED)
+                addDataScheme("package")
+            }
+            androidx.core.content.ContextCompat.registerReceiver(this, presenceReceiver, filter,
+                androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+            presenceReceiverRegistered = true
+        }
         root = FrameLayout(this).apply { setBackgroundColor(BACKGROUND) }
         aspectLayer = FrameLayout(this).apply {
             clipChildren = false
@@ -765,16 +960,18 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
         val shell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(BACKGROUND)
+            setBackgroundColor(Color.TRANSPARENT)
         }
         toolbar = FrameLayout(this).apply {
-            setBackgroundColor(Color.rgb(14, 16, 17))
+            setBackgroundColor(InputSettings.theme.darkBackground)
             setPadding(uiDp(12), 0, uiDp(12), 0)
         }
         shell.addView(toolbar, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, uiDp(34),
         ))
-        workspaceScroll = HorizontalScrollView(this).apply {
+        workspaceScroll = DesktopWorkspaceScrollView(this) { x, y ->
+            omaDesktop == null || windowAt(x, y)
+        }.apply {
             isHorizontalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
             isFillViewport = true
@@ -792,7 +989,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             // row already reserves their width when visible, so an outer inset would make the
             // arrows miss the cursor when it is parked at the far left or right edge.
             setPadding(0, 0, 0, 0)
-            setBackgroundColor(Color.rgb(14, 16, 17))
+            setBackgroundColor(InputSettings.theme.darkBackground)
         }
         taskbarScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
@@ -847,7 +1044,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         ))
         taskbarShell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(14, 16, 17))
+            setBackgroundColor(InputSettings.theme.darkBackground)
         }
         taskbarShell.addView(taskbar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         viewportMap = ViewportMapView(this)
@@ -860,11 +1057,30 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             setBackgroundColor(Color.BLACK)
         }
         aspectLayer.addView(fullscreenLayer, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        launcher = buildLauncher()
-        aspectLayer.addView(launcher, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        val connection = openDesktopSession(PendingExternalDesktopBridge) {
+            OmaDesktop(this, ::hideLauncher) { panelOpen ->
+                // Compose may report the outgoing panel closed before a new search opens.
+                // Phone search still owns the modal session throughout that transition.
+                setLauncherActive(panelOpen || LauncherSearchSession.active)
+            }
+        }
+        omaDesktop = connection.session
+        sharedDesktop = connection.shared
+        launcher = FrameLayout(this).apply {
+            setBackgroundColor(Color.TRANSPARENT)
+            addView(connection.session.view, FrameLayout.LayoutParams(-1, -1))
+        }
+        // Keep the home below app tiles, with menus raised only while active.
+        aspectLayer.addView(launcher, 0, FrameLayout.LayoutParams(-1, -1).apply {
+            topMargin = uiDp(34)
+            bottomMargin = uiDp(TASKBAR_HEIGHT_DP)
+        })
         cursorOverlay = BeastCursorOverlay(this)
+        cursorOverlay.translationZ = 2f
         aspectLayer.addView(cursorOverlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         setContentView(root)
+        setLauncherActive(launcherActive)
+        omaDesktop?.visible(true)
 
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             WorkspaceCursor.publishViewport(display?.displayId ?: -1, root.width, root.height)
@@ -917,6 +1133,9 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         val nextFontScale = nextElementScale
         val fontScaleChanged = kotlin.math.abs(uiFontScale - nextFontScale) >= .01f
         uiFontScale = nextFontScale
+        if (::root.isInitialized) root.setBackgroundColor(InputSettings.theme.darkerBackground)
+        if (::toolbar.isInitialized) toolbar.setBackgroundColor(InputSettings.theme.background)
+        if (::taskbar.isInitialized) taskbar.setBackgroundColor(InputSettings.theme.darkBackground)
         cards.values.forEach(BeastTaskCard::refreshAccent)
         if (::taskbarPrevious.isInitialized) {
             taskbarPrevious.setTextColor(InputSettings.accentColor)
@@ -937,7 +1156,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     /** Rebuild only the visible launcher so its accent-colored controls repaint immediately. */
     private fun refreshVisibleLauncher() {
-        if (!::launcher.isInitialized || launcher.visibility != View.VISIBLE) return
+        if (omaDesktop != null) return
+        if (!::launcher.isInitialized || !launcherActive) return
         val parent = launcher.parent as? ViewGroup ?: return
         val index = parent.indexOfChild(launcher)
         if (index < 0) return
@@ -952,7 +1172,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
                 ViewGroup.LayoutParams.MATCH_PARENT,
             ),
         )
-        launcher.visibility = View.VISIBLE
+        setLauncherActive(true)
         launcherQuery.setText(query)
         populateLauncher(query)
     }
@@ -1020,7 +1240,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun rebuildUiForElementScale() {
-        val launcherWasVisible = ::launcher.isInitialized && launcher.visibility == View.VISIBLE
+        val launcherWasVisible = ::launcher.isInitialized && launcherActive
         buildUi()
         renderWorkspace()
         if (launcherWasVisible) showLauncher() else restoreWorkspaceFocus()
@@ -1037,6 +1257,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             it.placement == TaskPlacement.BEAST_VISIBLE ||
                 it.placement == TaskPlacement.PENDING_BEAST
         }
+        if (shownTasks.isEmpty()) desktopFocused = true
         val liveIds = tasks.mapTo(hashSetOf()) { it.id }
         cards.keys.filterNot(liveIds::contains).forEach { id ->
             cards.remove(id)?.let { card ->
@@ -1197,8 +1418,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         taskTabs.removeAllViews()
         tasks.forEachIndexed { index, task ->
             val focused = WorkspaceState.focusedTaskId == task.id
-            val numberColor = if (focused) Color.rgb(232, 247, 248) else Color.WHITE
-            val labelColor = if (focused) Color.rgb(164, 223, 229) else Color.WHITE
+            val numberColor = if (focused) InputSettings.theme.brightForeground else InputSettings.theme.foreground
+            val labelColor = if (focused) InputSettings.theme.lightForeground else InputSettings.theme.foreground
             val focusRule = View(this).apply {
                 setBackgroundColor(if (focused) ACCENT else Color.TRANSPARENT)
             }
@@ -1282,25 +1503,48 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         val controls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.rgb(14, 16, 17))
+            setBackgroundColor(InputSettings.theme.darkBackground)
         }
-        controls.addView(label("+APPS", TOOLBAR_TEXT_SIZE, ACCENT).apply {
+        if (omaDesktop != null) controls.addView(label("DESKTOP", TOOLBAR_TEXT_SIZE, ACCENT).apply {
             gravity = Gravity.CENTER
             setPadding(uiDp(8), 0, uiDp(8), 0)
             contentDescription = "Open apps"
+            setBeastClick(::showOmaDesktop)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, uiDp(28)))
+        controls.addView(label("+APPS", TOOLBAR_TEXT_SIZE, ACCENT).apply {
+            gravity = Gravity.CENTER
+            setPadding(uiDp(8), 0, uiDp(8), 0)
             setBeastClick(::showLauncher)
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, uiDp(28)))
+        if (omaDesktop != null) controls.addView(label("WIDGETS", TOOLBAR_TEXT_SIZE, ACCENT).apply {
+            gravity = Gravity.CENTER
+            setPadding(uiDp(8), 0, uiDp(8), 0)
+            setBeastClick { setLauncherActive(true); omaDesktop?.widgets() }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, uiDp(28)))
+        if (omaDesktop != null) controls.addView(label("THEMES", TOOLBAR_TEXT_SIZE, ACCENT).apply {
+            gravity = Gravity.CENTER
+            setPadding(uiDp(8), 0, uiDp(8), 0)
+            setBeastClick { setLauncherActive(true); omaDesktop?.themes() }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, uiDp(28)))
+        run {
+            controls.addView(label(if (sharedDesktop) "OMA: SHARED" else "OMA: LOCAL", TOOLBAR_TEXT_SIZE, InputSettings.theme.muted).apply {
+                gravity = Gravity.CENTER
+                setPadding(uiDp(8), 0, uiDp(8), 0)
+                contentDescription = "Omalauncher desktop connection status"
+                setBeastClick(::showCompanionStatus)
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, uiDp(28)))
+        }
         controls.addView(label("SHOW ALL", TOOLBAR_TEXT_SIZE, ACCENT).apply {
             gravity = Gravity.CENTER
             setPadding(uiDp(8), 0, uiDp(8), 0)
-            setBeastClick(::showAllTasks)
+            setBeastClick { hideLauncher(); showAllTasks() }
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, uiDp(28)))
         controls.addView(label("MIN ALL", TOOLBAR_TEXT_SIZE, ACCENT).apply {
             gravity = Gravity.CENTER
             setPadding(uiDp(8), 0, uiDp(8), 0)
             setBeastClick(WorkspaceState::minimizeAll)
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, uiDp(28)))
-        controls.addView(label("CLOSE ALL", TOOLBAR_TEXT_SIZE, Color.rgb(224, 160, 151)).apply {
+        controls.addView(label("CLOSE ALL", TOOLBAR_TEXT_SIZE, InputSettings.theme.danger).apply {
             gravity = Gravity.CENTER
             setPadding(uiDp(8), 0, uiDp(8), 0)
             setBeastClick(::closeAllTasks)
@@ -1345,11 +1589,11 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             marginStart = uiDp(76)
             marginEnd = uiDp(220)
         })
-        toolbar.addView(label("LATERAL_", TOOLBAR_TEXT_SIZE, Color.rgb(178, 188, 187), bold = true).apply {
+        toolbar.addView(label("omalateral", TOOLBAR_TEXT_SIZE, InputSettings.theme.brightForeground, bold = true).apply {
             gravity = Gravity.CENTER_VERTICAL or Gravity.START
-            contentDescription = "LATERAL_"
+            contentDescription = "omalateral"
         }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.START))
-        systemStatus = label(systemStatusText(), TOOLBAR_TEXT_SIZE, Color.rgb(178, 188, 187)).apply {
+        systemStatus = label(systemStatusText(), TOOLBAR_TEXT_SIZE, InputSettings.theme.brightForeground).apply {
             gravity = Gravity.CENTER_VERTICAL or Gravity.END
             contentDescription = "Time, date, battery, and network status"
             maxLines = 1
@@ -1415,6 +1659,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun showInputSettings() {
+        hideLauncher()
         InputSettingsPanel.show(
             context = this,
             onModalVisibilityChanged = { visible -> cursorOverlay.visibility = if (phoneViewSession) View.GONE else if (visible) View.INVISIBLE else View.VISIBLE },
@@ -1424,6 +1669,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun showExternalDisplaySettings() {
+        hideLauncher()
         HostedTextInputSession.close()
         ExternalDisplayPanel.show(
             context = this,
@@ -1546,7 +1792,14 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun scrollWorkspace(wheel: Float) {
-        val targetsLauncher = launcher.visibility == View.VISIBLE
+        if (omaDesktop != null && launcherActive) {
+            val position = WorkspaceCursor.position()
+            routeAppScroll(display?.displayId ?: -1,
+                (position.xFraction * root.width).toInt(),
+                (position.yFraction * root.height).toInt(), wheel)
+            return
+        }
+        val targetsLauncher = launcherActive
         val direction = if (InputSettings.invertScrollbarScroll) -1f else 1f
         val distance = if (targetsLauncher) {
             direction * wheel * dp(96)
@@ -1609,8 +1862,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             isSingleLine = true
             typeface = Typeface.MONOSPACE
             textSize = 18f
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.rgb(105, 119, 119))
+            setTextColor(InputSettings.theme.brightForeground)
+            setHintTextColor(InputSettings.theme.muted)
             setBackgroundColor(Color.TRANSPARENT)
             showSoftInputOnFocus = false
             addTextChangedListener(SimpleTextWatcher { value ->
@@ -1641,7 +1894,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         launcherPanel.addView(header)
         launcherPanel.addView(buildLauncherSortBar(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, uiDp(38)))
         launcherPanel.addView(launcherScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        launcherPanel.addView(label("esc:close", 10f, Color.rgb(105, 119, 119)).apply { gravity = Gravity.END })
+        launcherPanel.addView(label("esc:close", 10f, InputSettings.theme.muted).apply { gravity = Gravity.END })
         overlay.addView(launcherPanel, FrameLayout.LayoutParams(
             uiDp(420),
             uiDp(520),
@@ -1654,7 +1907,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         LauncherSort.entries.forEach { option ->
-            addView(label(option.title, 11f, if (launcherPreferences.sort == option) ACCENT else Color.rgb(105, 119, 119)).apply {
+            addView(label(option.title, 11f, if (launcherPreferences.sort == option) ACCENT else InputSettings.theme.muted).apply {
                 gravity = Gravity.CENTER
                 setPadding(uiDp(12), 0, uiDp(12), 0)
                 setBeastClick {
@@ -1675,6 +1928,20 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun showLauncher() {
+        showLegacyLauncher()
+        setLauncherActive(true)
+        root.post { if (launcherActive) omaDesktop?.search(LauncherSearchSession.query, false) }
+    }
+
+    private fun showOmaDesktop() {
+        hideLauncher()
+        WorkspaceState.minimizeAll()
+        desktopFocused = true
+        omaDesktop?.view?.requestFocus()
+        hideSystemKeyboard()
+    }
+
+    private fun showLegacyLauncher() {
         // Repeated intents and appearance rebuilds must not close our own search session.
         launcherLease?.release()
         launcherLease = null
@@ -1705,7 +1972,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             TransientPanelCoordinator.Kind.APPS,
         ) {
             if (::launcher.isInitialized) {
-                launcher.visibility = View.GONE
+                omaDesktop?.dismissPanels()
+                setLauncherActive(false)
                 LauncherSearchSession.close()
                 if (::root.isInitialized) root.requestFocus()
                 hideSystemKeyboard()
@@ -1713,19 +1981,28 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             if (launcherLease === lease) launcherLease = null
         }
         launcherLease = lease
-        launcher.visibility = View.VISIBLE
-        launcherQuery.setText(LauncherSearchSession.query)
-        populateLauncher(LauncherSearchSession.query)
-        launcherPanel.post(::fitLauncherPopup)
-        launcherQuery.requestFocus()
-        launcherQuery.post(::hideSystemKeyboard)
+        setLauncherActive(true)
+        if (omaDesktop == null) {
+            launcherQuery.setText(LauncherSearchSession.query)
+            populateLauncher(LauncherSearchSession.query)
+            launcherPanel.post(::fitLauncherPopup)
+            launcherQuery.requestFocus()
+            launcherQuery.post(::hideSystemKeyboard)
+        } else {
+            omaDesktop?.view?.requestFocus()
+            hideSystemKeyboard()
+        }
         // Refresh Android's Overview ordering each time the launcher opens. Once the
         // workspace is seeded this updates sorting only; it never rearranges its cards.
         if (PrivilegedService.state == PrivilegedService.State.READY) syncAndroidTasks()
     }
 
     private fun hideLauncher() {
-        launcher.visibility = View.GONE
+        desktopLongPress.cancel()
+        secondaryCancelled = true
+        omaDesktop?.dismissPanels()
+        setLauncherActive(false)
+        desktopFocused = cards.values.none { it.isShown }
         LauncherSearchSession.close()
         launcherLease?.release()
         launcherLease = null
@@ -1795,7 +2072,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(label(info.loadLabel(packageManager).toString().lowercase(), 15f, Color.rgb(202, 212, 210)).apply {
+                        addView(label(info.loadLabel(packageManager).toString().lowercase(), 15f, InputSettings.theme.foreground).apply {
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(uiDp(8), 0, uiDp(8), 0)
                 setBeastClick { launchFromLauncher(info) }
@@ -1853,6 +2130,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun focusTask(task: BeastTask) {
+        if (launcherActive) hideLauncher()
+        desktopFocused = false
         // Input delivered inside the already-focused hosted task (pinch, scroll, Chrome
         // menu controls, and contextual actions) must not re-run a cross-display task
         // focus transaction. That transaction can briefly front the task on Android and
@@ -1932,7 +2211,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         recentPackageRank = recent.map { it.packageName }.distinct().withIndex()
             .associate { it.value to it.index }
         AndroidTaskSynchronizer.requestImmediate()
-        if (launcher.visibility == View.VISIBLE) populateLauncher(launcherQuery.text.toString())
+        if (launcherActive && omaDesktop == null) populateLauncher(launcherQuery.text.toString())
     }
 
     private fun loadApps(): List<ResolveInfo> {
@@ -2126,10 +2405,10 @@ internal class BeastTaskCard(
         }
         column.orientation = LinearLayout.VERTICAL
         chrome.setPadding(dp(8), 0, dp(4), 0)
-        chrome.setBackgroundColor(Color.rgb(16, 19, 20))
+        chrome.setBackgroundColor(InputSettings.theme.background)
         appLabel.typeface = Typeface.MONOSPACE
         appLabel.textSize = 11f * fontScale
-        appLabel.setTextColor(Color.rgb(178, 188, 187))
+        appLabel.setTextColor(InputSettings.theme.foreground)
         appLabel.maxLines = 1
         appLabel.ellipsize = TextUtils.TruncateAt.END
         appLabel.minWidth = 0
@@ -2223,7 +2502,7 @@ internal class BeastTaskCard(
         fullscreenExit.typeface = Typeface.MONOSPACE
         fullscreenExit.textSize = 12f * fontScale
         fullscreenExit.setTextColor(InputSettings.accentColor)
-        fullscreenExit.setBackgroundColor(Color.argb(190, 15, 18, 19))
+        fullscreenExit.setBackgroundColor(Color.argb(190, Color.red(InputSettings.theme.darkerBackground), Color.green(InputSettings.theme.darkerBackground), Color.blue(InputSettings.theme.darkerBackground)))
         fullscreenExit.visibility = View.GONE
         fullscreenExit.setOnClickListener { controlDebouncer.submit { onFullscreen?.invoke() } }
         fullscreenExit.installBeastHover { InputSettings.accentColor }
@@ -2263,6 +2542,9 @@ internal class BeastTaskCard(
     fun refreshAccent() {
         modeButton.setTextColor(InputSettings.accentColor)
         fullscreenExit.setTextColor(InputSettings.accentColor)
+        chrome.setBackgroundColor(InputSettings.theme.background)
+        appLabel.setTextColor(InputSettings.theme.foreground)
+        fullscreenExit.setBackgroundColor(Color.argb(190, Color.red(InputSettings.theme.darkerBackground), Color.green(InputSettings.theme.darkerBackground), Color.blue(InputSettings.theme.darkerBackground)))
         applyWindowBorder()
     }
 
@@ -2280,7 +2562,7 @@ internal class BeastTaskCard(
         val border = if (fullscreen) 0 else dp(OMARCHY_WINDOW_BORDER_DP).coerceAtLeast(1)
         setPadding(border, border, border, border)
         background = if (fullscreen) {
-            ColorDrawable(Color.rgb(12, 14, 15))
+            ColorDrawable(InputSettings.theme.darkerBackground)
         } else {
             omarchyWindowBorder(focused, border)
         }
@@ -2360,7 +2642,7 @@ internal class BeastTaskCard(
         gravity = Gravity.CENTER
         typeface = Typeface.MONOSPACE
         textSize = 12f * fontScale
-        setTextColor(Color.rgb(139, 153, 152))
+        setTextColor(InputSettings.theme.darkForeground)
         setOnClickListener { controlDebouncer.submit(action) }
         installBeastHover()
         layoutParams = LinearLayout.LayoutParams(dp(30), ViewGroup.LayoutParams.MATCH_PARENT)

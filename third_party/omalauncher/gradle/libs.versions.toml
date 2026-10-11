@@ -1,0 +1,26 @@
+[versions]
+agp = "9.4.1"
+kotlin = "2.4.20"
+compose-multiplatform = "1.12.1"
+androidx-activity = "1.13.0"
+androidsvg = "1.4"
+commons-compress = "1.28.0"
+zxing = "3.5.4"
+junit = "4.13.2"
+org-json = "20260814"
+
+[libraries]
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }
+compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose-multiplatform" }
+compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "compose-multiplatform" }
+compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "compose-multiplatform" }
+junit = { module = "junit:junit", version.ref = "junit" }
+org-json = { module = "org.json:json", version.ref = "org-json" }
+androidsvg = { module = "com.caverock:androidsvg-aar", version.ref = "androidsvg" }
+commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commons-compress" }
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

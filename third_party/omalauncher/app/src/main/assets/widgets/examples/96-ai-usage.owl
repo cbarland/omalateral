@@ -1,0 +1,55 @@
+widget "ai usage" {
+  page: 4
+  order: 3
+  size: 6x3
+  minSize: 3x2
+
+  requires { pacman: ["jq", "procps-ng", "findutils"] }
+
+  // Today's tokens (UTC day) from the agents' own session logs, so no API keys are needed.
+  // Claude Code: input + output + cache writes per message, messages counted once.
+  // Codex: each of today's sessions reports a running total; its last one counts.
+  source ai = cmd("""
+    d=$(date -u +%F)
+    claude=$(find ~/.claude/projects -name '*.jsonl' -newermt "$d" 2>/dev/null | xargs grep -h "\"timestamp\":\"$d" 2>/dev/null | jq -sc '
+      [.[] | select(.type == "assistant" and .message.usage != null)] | unique_by((.message.id // "") + (.requestId // "")) |
+      {tokens: (map(.message.usage | (.input_tokens // 0) + (.output_tokens // 0) + (.cache_creation_input_tokens // 0)) | add // 0),
+       sessions: (map(.sessionId) | unique | length),
+       hours: [range(24) as $h | map(select((.timestamp[11:13] | tonumber) == $h) | .message.usage.output_tokens // 0) | add // 0]}')
+    codex=$(ls ~/.codex/sessions/$(date +%Y/%m/%d)/*.jsonl 2>/dev/null | while read -r f; do grep '"token_count"' "$f" | tail -1; done | jq -sc '
+      {tokens: (map(.payload.info.total_token_usage.total_tokens // 0) | add // 0), sessions: length}')
+    printf '{"claude":%s,"codex":%s,"running":{"claude":%s,"codex":%s}}\n' "$claude" "$codex" "$(pgrep -x claude | wc -l)" "$(pgrep -x codex | wc -l)"
+  """) every 2m json timeout 30s
+
+  component Agent(name, tokens, sessions, running) {
+    Column {
+      gap: 0
+      Row {
+        gap: 6
+        align: center
+        Text { text: name; style: label; weight: 1 }
+        if running > 0 { Text { text: "● ${running}"; fontSize: 11; color: green; width: 32; align: end } }
+      }
+      Text {
+        text: tokens == null ? "…" : tokens >= 1000000 ? "${round(tokens / 1000000, 1)}M" : tokens >= 1000 ? "${round(tokens / 1000)}k" : "${tokens}"
+        style: title
+        color: tokens > 0 ? foreground : muted
+      }
+      Text { text: sessions == 1 ? "1 session" : "${sessions ?? 0} sessions"; style: small; color: muted }
+    }
+  }
+
+  onTap: launcher("agents")
+
+  Column {
+    gap: 6
+    Text { text: "ai tokens today"; style: muted }
+    Row {
+      gap: 12
+      Agent { name: "claude"; tokens: ai.claude.tokens; sessions: ai.claude.sessions; running: ai.running.claude; weight: 1 }
+      Agent { name: "codex"; tokens: ai.codex.tokens; sessions: ai.codex.sessions; running: ai.running.codex; weight: 1 }
+    }
+    // Claude's output tokens per hour of the day.
+    Sparkline { values: ai.claude.hours; color: accent; area: true; fill: width; weight: 1 }
+  }
+}

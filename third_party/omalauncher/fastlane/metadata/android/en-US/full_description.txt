@@ -1,0 +1,30 @@
+Omalauncher is a keyboard-friendly home screen that brings the look of Omarchy to Android, and can run a full Arch Linux ARM system next to your phone apps.
+
+THEMES
+Pick from 22 Omarchy themes: Tokyo Night, Catppuccin, Gruvbox, Nord, Rose Pine, Kanagawa, Everforest and more. Each theme colors the whole launcher and comes with its own wallpapers, which you can also use as a live wallpaper.
+
+HOME SCREEN AND WIDGETS
+• Pages of widgets and pinned apps on a grid
+• Built-in widgets for the date and weather
+• A widget store with more widgets, written in a small open language you can edit yourself
+• An app drawer with search for all your Android apps
+
+ARCH LINUX (OPTIONAL)
+The launcher works without it. If you want it, Omalauncher downloads Arch Linux ARM and runs it with proot, without root.
+• Linux apps open as their own windows, each with its own card in Recents
+• Omalauncher is the Wayland compositor, so graphical apps like foot work
+• Search and install packages from Arch Linux ARM and the AUR
+• Terminal widgets that run commands on your home screen
+• Files, a file manager for the Linux home folder
+• Your theme is applied to the Linux apps too
+
+CODING AGENTS
+With Linux installed, the prompt bar at the bottom of the home screen sends a prompt to a coding agent such as Claude Code, Codex, Copilot or opencode, which opens in a terminal. Hold the mic to dictate; speech is recognized by Android, so only the text reaches Linux.
+
+KEYBOARD SHORTCUTS
+With a hardware keyboard: Super+Enter opens a terminal, Super+Space the drawer, Super+A the agent prompt, Super+1 to 9 switch pages and Super+W closes a window.
+
+PRIVACY
+No account, no ads, no tracking. Omalauncher only connects to the internet to download themes, widgets, weather and, if you choose, Linux and its packages.
+
+Omalauncher is an independent project and is not affiliated with Omarchy or Arch Linux.

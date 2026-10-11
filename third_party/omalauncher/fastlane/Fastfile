@@ -1,0 +1,52 @@
+default_platform(:android)
+
+AAB = 'app/build/outputs/bundle/release/app-release.aab'
+
+platform :android do
+  desc "Upload the store listing text and images (no build)"
+  lane :metadata do
+    upload_to_play_store(
+      skip_upload_apk: true,
+      skip_upload_aab: true,
+      skip_upload_changelogs: true,
+    )
+  end
+
+  desc "Build and upload an AAB to the internal testing track"
+  lane :internal do
+    gradle(task: ':app:bundleRelease')
+    upload_to_play_store(
+      track: 'internal',
+      aab: AAB,
+      skip_upload_apk: true,
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+    )
+  end
+
+  desc "Promote the internal build to production"
+  lane :promote do
+    upload_to_play_store(
+      track: 'internal',
+      track_promote_to: 'production',
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      skip_upload_changelogs: true,
+    )
+  end
+
+  desc "Build and upload an AAB straight to production"
+  lane :deploy do
+    gradle(task: ':app:bundleRelease')
+    upload_to_play_store(
+      track: 'production',
+      aab: AAB,
+      skip_upload_apk: true,
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+    )
+  end
+end

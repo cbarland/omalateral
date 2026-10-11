@@ -1,0 +1,18 @@
+widget "weather" {
+  page: 2
+  order: 1
+  size: 6x2
+  minSize: 3x2
+
+  // Straight from Android: no curl, no shell.
+  source now = http("https://wttr.in/?format=%t+%C") every 30m timeout 8s status
+  source place = http("https://wttr.in/?format=%l") every 30m timeout 8s
+
+  onTap: url("https://wttr.in")
+
+  Column {
+    Text { text: "weather"; style: muted }
+    Text { text: now == null ? null : now.ok ? now.out : "offline"; style: title; color: cyan }
+    Text { text: place; style: small }
+  }
+}

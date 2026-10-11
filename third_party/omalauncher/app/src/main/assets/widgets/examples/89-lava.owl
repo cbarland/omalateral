@@ -1,0 +1,101 @@
+widget "lava lamp" {
+  meta { description: "A pixel lava lamp in your theme's colors. Tap it for another wax color"; version: "1.0"; license: "MIT"; category: "fun" }
+  page: 2
+  order: 2
+  size: 3x3
+  minSize: 1x2
+  padding: 0
+
+  // Wax and its glow, picked by tapping.
+  state wax = 0 persist
+  let colors = [[accent, magenta], [orange, red], [cyan, blue], [green, yellow]]
+  let pick = colors[wax % len(colors)]
+
+  onTap: wax = (wax + 1) % len(colors)
+
+  // Metaballs in a lamp outline, drawn on a coarse grid so it matches the pixel
+  // art of the koi pond and the owl. All lengths are fractions of the height.
+  Shader {
+    fill: true
+    fallback: surface
+    uniforms: { bg: background, fg: foreground, a: pick[0], b: pick[1] }
+    code: """
+      uniform half4 bg;
+      uniform half4 fg;
+      uniform half4 a;
+      uniform half4 b;
+
+      // The wax: six blobs bobbing up and down at their own pace, a pool at the
+      // bottom where the heat is, and a little stuck to the top.
+      float field(float2 q, float t) {
+        float f = 0.0;
+        for (int i = 0; i < 6; i++) {
+          float fi = float(i);
+          float y = 0.45 + 0.24 * sin(t * (0.21 + 0.05 * fi) + fi * 1.7);
+          float x = 0.045 * sin(t * 0.13 + fi * 2.3);
+          float r = 0.032 + 0.011 * mod(fi, 3.0);
+          float2 d = (q - float2(x, y)) * float2(1.0, 0.8);
+          f += r * r / dot(d, d);
+        }
+        float2 d0 = (q - float2(0.0, 0.76)) * float2(0.55, 1.0);
+        f += 0.0064 / dot(d0, d0);
+        float2 d1 = (q - float2(0.0, 0.15)) * float2(0.7, 1.0);
+        f += 0.0012 / dot(d1, d1);
+        return f;
+      }
+
+      // Brushed metal: lighter on the left, in a few flat bands.
+      half3 metal(float s) {
+        float light = floor((0.6 - 0.4 * s) * 4.0) / 4.0;
+        return mix(bg.rgb, fg.rgb, 0.18 + 0.3 * light);
+      }
+
+      half4 main(float2 p) {
+        float cell = max(floor(size.y / 72.0), 1.0);
+        p = (floor(p / cell) + 0.5) * cell;
+        float2 q = float2((p.x - size.x * 0.5) / size.y, p.y / size.y);
+        float y = q.y;
+        float ax = abs(q.x);
+        half3 col = bg.rgb;
+
+        // A soft glow around the glass in the liquid's color, in flat steps,
+        // fading out above and below it.
+        float gy = clamp((y - 0.17) / 0.56, 0.0, 1.0);
+        float ghw = 0.1 + 0.09 * sin(gy * 2.6);
+        float gd = max(ax - ghw, 0.0) + max(abs(y - 0.48) - 0.25, 0.0);
+        float halo = exp(-gd * 14.0) * 0.22;
+        col = mix(col, b.rgb, floor(halo * 30.0) / 30.0);
+
+        if (y > 0.06 && y < 0.17) {
+          // The cap, a cone.
+          float hw = mix(0.06, 0.1, (y - 0.06) / 0.11);
+          if (ax < hw) col = metal(q.x / hw);
+        } else if (y >= 0.17 && y < 0.73) {
+          // The glass: narrow at the top, widest low down, tucked into the base.
+          float g = (y - 0.17) / 0.56;
+          float hw = 0.1 + 0.09 * sin(g * 2.6);
+          if (ax < hw) {
+            float s = q.x / hw;
+            // Colored liquid, lit from below.
+            half3 liquid = mix(bg.rgb, b.rgb, 0.3 + 0.2 * smoothstep(0.3, 0.73, y));
+            float f = field(q, time);
+            if (f > 1.0) {
+              // Wax: a darker rim, then brighter towards the middle of each blob.
+              col = f < 1.25 ? mix(a.rgb, bg.rgb, 0.25) : mix(a.rgb, fg.rgb, 0.25 * clamp(f - 1.25, 0.0, 1.0));
+            } else {
+              col = mix(liquid, a.rgb, floor(f * 4.0) / 4.0 * 0.3);
+            }
+            // A highlight down the left of the glass, and a light rim.
+            if (s > -0.72 && s < -0.55) col = mix(col, fg.rgb, 0.2);
+            if (abs(s) > 0.88) col = mix(col, fg.rgb, 0.12);
+          }
+        } else if (y >= 0.73 && y < 0.95) {
+          // The base, a cone the other way, with a lip at the top.
+          float hw = mix(0.13, 0.21, (y - 0.73) / 0.22);
+          if (ax < hw) col = y < 0.75 ? mix(bg.rgb, fg.rgb, 0.12) : metal(q.x / hw);
+        }
+        return half4(col, 1.0);
+      }
+    """
+  }
+}

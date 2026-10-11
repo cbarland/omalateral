@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 val vitureSdkEnabled = providers.gradleProperty("lateral.vitureSdk")
@@ -23,19 +24,19 @@ android {
     productFlavors {
         create("stable") {
             dimension = "edition"
-            applicationId = "com.lateral"
-            manifestPlaceholders["lateralPrivilegedAuthority"] = "com.lateral.privileged"
-            manifestPlaceholders["lateralPairingAction"] = "com.lateral.privileged.SUBMIT_PAIRING_CODE"
-            manifestPlaceholders["lateralBeastTaskAffinity"] = "com.lateral.beast"
+            applicationId = "com.omalateral"
+            manifestPlaceholders["lateralPrivilegedAuthority"] = "com.omalateral.privileged"
+            manifestPlaceholders["lateralPairingAction"] = "com.omalateral.privileged.SUBMIT_PAIRING_CODE"
+            manifestPlaceholders["lateralBeastTaskAffinity"] = "com.omalateral.beast"
             manifestPlaceholders["lateralLauncherIcon"] = "@mipmap/ic_launcher"
             manifestPlaceholders["lateralLauncherRoundIcon"] = "@mipmap/ic_launcher_round"
         }
         create("dev") {
             dimension = "edition"
-            applicationId = "com.lateral.dev"
-            manifestPlaceholders["lateralPrivilegedAuthority"] = "com.lateral.dev.privileged"
-            manifestPlaceholders["lateralPairingAction"] = "com.lateral.dev.privileged.SUBMIT_PAIRING_CODE"
-            manifestPlaceholders["lateralBeastTaskAffinity"] = "com.lateral.dev.beast"
+            applicationId = "com.omalateral.dev"
+            manifestPlaceholders["lateralPrivilegedAuthority"] = "com.omalateral.dev.privileged"
+            manifestPlaceholders["lateralPairingAction"] = "com.omalateral.dev.privileged.SUBMIT_PAIRING_CODE"
+            manifestPlaceholders["lateralBeastTaskAffinity"] = "com.omalateral.dev.beast"
             manifestPlaceholders["lateralLauncherIcon"] = "@mipmap/ic_launcher_dev"
             manifestPlaceholders["lateralLauncherRoundIcon"] = "@mipmap/ic_launcher_dev_round"
         }
@@ -43,20 +44,20 @@ android {
             dimension = "edition"
             // The V variant replaces the public stable APK on-device while
             // advertising its optional, SDK-backed feature set in the launcher.
-            applicationId = "com.lateral"
-            manifestPlaceholders["lateralPrivilegedAuthority"] = "com.lateral.privileged"
-            manifestPlaceholders["lateralPairingAction"] = "com.lateral.privileged.SUBMIT_PAIRING_CODE"
-            manifestPlaceholders["lateralBeastTaskAffinity"] = "com.lateral.beast"
+            applicationId = "com.omalateral"
+            manifestPlaceholders["lateralPrivilegedAuthority"] = "com.omalateral.privileged"
+            manifestPlaceholders["lateralPairingAction"] = "com.omalateral.privileged.SUBMIT_PAIRING_CODE"
+            manifestPlaceholders["lateralBeastTaskAffinity"] = "com.omalateral.beast"
             manifestPlaceholders["lateralLauncherIcon"] = "@mipmap/ic_launcher"
             manifestPlaceholders["lateralLauncherRoundIcon"] = "@mipmap/ic_launcher_round"
         }
     }
 
     defaultConfig {
-        minSdk = 26
+        minSdk = 29
         targetSdk = 37
-        versionCode = 7
-        versionName = "0.2.11"
+        versionCode = 6
+        versionName = "0.1.0-alpha06"
         buildConfigField("boolean", "VITURE_SDK_ENABLED", vitureSdkEnabled.toString())
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -83,9 +84,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     buildFeatures {
+        compose = true
         aidl = true
         buildConfig = true
     }
+    packaging { jniLibs { useLegacyPackaging = true } }
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
@@ -100,6 +103,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":omalauncher"))
     implementation("com.lateral.thirdparty:florisboard-embedded:0.5.2-lateral.1")
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.core.ktx)

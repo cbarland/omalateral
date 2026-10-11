@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The home screen shows the Android wallpaper through a transparent window. -->
+    <style name="Theme.Omalauncher" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowShowWallpaper">true</item>
+    </style>
+
+    <style name="Theme.Omalauncher.Window" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#FF1A1B26</item>
+    </style>
+</resources>

@@ -1,0 +1,225 @@
+widget "koi pond" {
+  meta { description: "A pixel-art koi pond in your theme's colors. Tap the water to feed the koi"; version: "1.0"; license: "MIT"; category: "fun" }
+  page: 1
+  order: 6
+  size: 6x3
+  minSize: 2x2
+  padding: 0
+
+  // Pixel-art koi in theme colors. A Canvas keeps nothing between frames, so
+  // every koi is a function of `time`: the head swims a loop, and the body is
+  // drawn where the head was a moment ago, as blocky discs on a pixel grid.
+  //
+  // Tap the water to feed them: each koi's loop glides over to the food and
+  // tightens around it, so they turn and swim there, then drift home. A tap
+  // stores where the food spot and each koi's pull currently are, so another
+  // tap carries on from there instead of starting over.
+  state fedAt = -100
+  state foodX = 0
+  state foodY = 0
+  state fromX = 0
+  state fromY = 0
+  state fromE = [0, 0]
+
+  // Paths are in fractions of the tile: x = sin(t), y = cos(ratio * t + ph).
+  // `spots` are [segment, side] pairs that get a patch in `spot`.
+  let koi = [
+    {cx: 0.46, cy: 0.50, rx: 0.32, ry: 0.30, ratio: 1, ph: 0.3, speed: 0.22, dir: 1, body: foreground, spot: red, spots: [[0, 0], [2, 1], [3, 0], [6, -1], [7, 1]]},
+    {cx: 0.50, cy: 0.48, rx: 0.38, ry: 0.36, ratio: 1, ph: -0.4, speed: 0.18, dir: -1, body: orange, spot: foreground, spots: [[2, -1], [5, 1]]}
+  ]
+  // Body half-width per segment in art pixels, head first.
+  let profile = [2, 3, 3, 3, 3, 3, 3, 2, 2, 2, 1, 1, 1, 1, 0]
+
+  // Seconds since the last tap. `time` starts again from 0 when the tile's
+  // frame clock restarts (say, after its page was off screen), so a tap that
+  // seems to be in the future was really long ago.
+  let since = time >= fedAt ? time - fedAt : 1000
+
+  // Lambdas in lets can't be called directly, only passed to map and friends.
+  let ease = g => g * g * (3 - 2 * g)
+  // How strongly a koi is drawn to the food, from [pull at the last tap, seconds since]:
+  // up to 1 over 2.4 s, then back to 0 after 10 s.
+  let pull = v => min(lerp(v[0], 1, clamp(v[1] / 2.4, 0, 1)), clamp((10 - v[1]) / 2.5, 0, 1))
+  let pullNow = koi.map((f, i) => [fromE[i] ?? 0, since - i * 0.4]).map(pull)
+  // The food spot glides from where it was to the new tap.
+  let glideNow = [clamp(since / 1.6, 0, 1)].map(ease)[0]
+
+  // One art pixel, in dp. With no padding the Canvas is the whole tile.
+  let p = clamp(round(min(tileWidth ?? 300, tileHeight ?? 200) / 70), 2, 5)
+
+  // The lily pad only changes with the tile's size, so its rects are worked out
+  // here, once, rather than every frame: [x, y, w, h, color]. A pixel disc a row
+  // at a time, with a thin slit running down and right from the centre (one
+  // pixel wide, widening towards the edge), a darker rim below, faint veins and
+  // a highlight along the top. Rows are half a dp taller than a pixel so no
+  // seam shows where p isn't whole device pixels.
+  let leaf = mix(mix(green, foreground, 0.3), background, 0.3)
+  // Centre column and row, and radius, in art pixels
+  let pad = [floor((tileWidth ?? 300) * 0.66 / p), floor((tileHeight ?? 200) * 0.38 / p), round(0.13 * min(tileWidth ?? 300, tileHeight ?? 200) / p)]
+  let slope = 0.8
+  let padRects = flatten([
+    // Rows: [j, half width, slit column, slit width]
+    range(1 - pad[2], pad[2]).map(j => [j, floor(sqrt(pad[2] * pad[2] - j * j) + 0.5), pad[0] + round(slope * j), 1 + floor(j * 1.5 / pad[2])])
+      .map(r => r[0] > 0 ?
+        [[(pad[0] - r[1]) * p, (pad[1] + r[0]) * p, max(r[2] - pad[0] + r[1], 0) * p, p + 0.5, leaf],
+         [(r[2] + r[3]) * p, (pad[1] + r[0]) * p, max(pad[0] + r[1] - r[2] - r[3] + 1, 0) * p, p + 0.5, leaf]] :
+        [[(pad[0] - r[1]) * p, (pad[1] + r[0]) * p, (2 * r[1] + 1) * p, p + 0.5, leaf]]),
+    // The rim: the pixels just below the lower half's edge, [j, half, half of the row below]
+    range(0, pad[2]).map(j => [j, floor(sqrt(pad[2] * pad[2] - j * j) + 0.5), j + 1 < pad[2] ? floor(sqrt(pad[2] * pad[2] - (j + 1) * (j + 1)) + 0.5) : -1])
+      .filter(r => r[2] < r[1])
+      .map(r => [[(pad[0] - r[1]) * p, (pad[1] + r[0] + 1) * p, (r[1] - r[2]) * p, p, mix(leaf, background, 0.5)],
+                 [(pad[0] + r[2] + 1) * p, (pad[1] + r[0] + 1) * p, (r[1] - r[2]) * p, p, mix(leaf, background, 0.5)]]),
+    // Veins: at right angles to the slit, and opposite it
+    [[-1, slope], [-slope, -1], [1, -slope]].map(v => range(3, pad[2] - 2).map(r => [(pad[0] + round(v[0] * r / sqrt(1 + slope * slope))) * p, (pad[1] + round(v[1] * r / sqrt(1 + slope * slope))) * p, p, p, mix(leaf, background, 0.1)])),
+    // Highlight along the top-left edge
+    [range(-3, 4).map(q => [(pad[0] + round(cos(rad(q * 9 - 115)) * (pad[2] - 2))) * p, (pad[1] + round(sin(rad(q * 9 - 115)) * (pad[2] - 2))) * p, p, p, mix(leaf, foreground, 0.2)])]
+  ].map(group => flatten(group)))
+
+  Canvas {
+    onTap: {
+      fromX = max(pullNow) > 0.01 ? lerp(fromX, foodX, glideNow) : x
+      fromY = max(pullNow) > 0.01 ? lerp(fromY, foodY, glideNow) : y
+      fromE = pullNow
+      fedAt = time
+      foodX = x
+      foodY = y
+    }
+
+    let fed = since
+    // Long enough for the pull to fade and for the body to swim off the path it took.
+    let feeding = fed < 25
+
+    clip(0, 0, width, height) {
+      // Food: a pixel ring where it landed, and pellets the koi nibble away.
+      if fed < 2.5 {
+        for q in range(20) {
+          let qa = rad(q * 18)
+          rect(floor((foodX + cos(qa) * fed * 14 * p) / p) * p, floor((foodY + sin(qa) * fed * 14 * p) / p) * p, p, p, fill: alpha(accent, 0.8 * (1 - fed / 2.5)))
+        }
+      }
+      if fed < 6 {
+        for j in range(5 - fed) {
+          let qa = rad(j * 72 + 20)
+          rect(floor((foodX + cos(qa) * 3 * p) / p) * p, floor((foodY + sin(qa) * 3 * p) / p) * p, p, p, fill: yellow)
+        }
+      }
+
+      for f, i in koi {
+        let ds = 1.5 * p
+        let dir = f.dir
+        let ratio = f.ratio
+        let ph = f.ph
+        let cxw = f.cx * width
+        let cyw = f.cy * height
+        let rxw = f.rx * width
+        let ryw = f.ry * height
+
+        // Idle, the path is just the loop: step back along it directly, by the
+        // loop's speed halfway back, so the body keeps its length where the
+        // loop speeds up or slows down.
+        let th = ph + dir * time * f.speed
+        let thStep = ds / max(sqrt(pow(rxw * cos(th), 2) + pow(ryw * ratio * sin(ratio * th + ph), 2)), 1)
+        let looped = range(len(profile) + 1).map(k => th - dir * k * thStep / 2)
+          .map((m, k) => th - dir * k * ds / max(sqrt(pow(rxw * cos(m), 2) + pow(ryw * ratio * sin(ratio * m + ph), 2)), 1))
+          .map(t => [cxw + rxw * sin(t), cyw + ryw * cos(ratio * t + ph), 0])
+
+        // Feeding: where the head is at time tau, as [x, y, pull]. The loop's
+        // centre and radii blend from home to a circle around the food.
+        let fe = fromE[i] ?? 0
+        let fr = (12 + i * 6) * p
+        let lo = fr + 4 * p
+        let at = tau => [[fe, tau - fedAt - i * 0.4]].map(pull).map(ease)
+          .map(e => [e, [clamp((tau - fedAt) / 1.6, 0, 1)].map(ease)[0], ph + dir * tau * f.speed])
+          .map(v => [
+            lerp(cxw, clamp(lerp(fromX, foodX, v[1]), lo, width - lo), v[0]) + lerp(rxw, fr, v[0]) * sin(v[2]),
+            lerp(cyw, clamp(lerp(fromY, foodY, v[1]), lo, height - lo), v[0]) + lerp(ryw, fr, v[0]) * cos(ratio * v[2] + ph),
+            v[0]
+          ])[0]
+        // The body lies along the head's recent path a fixed distance apart, so
+        // it keeps its length whether the koi darts or dawdles: sample the path
+        // over a window sized from the head's speed, then walk along it.
+        let probe = [time, time - 0.1].map(at)
+        let speed = sqrt(pow(probe[0][0] - probe[1][0], 2) + pow(probe[0][1] - probe[1][1], 2)) / 0.1
+        let n = 24
+        let window = 2 * len(profile) * ds / max(speed, 3)
+        let path = range(n + 1).map(j => time - j * window / n).map(at)
+        let steps = range(n).map(j => max(sqrt(pow(path[j][0] - path[j + 1][0], 2) + pow(path[j][1] - path[j + 1][1], 2)), 0.001))
+        let along = range(n + 1).map(j => sum(steps.take(j)))
+        let walked = range(len(profile) + 1).map(k => [k * ds, clamp(count(along, c => c <= k * ds) - 1, 0, n - 1)])
+          .map(v => [v[1], clamp((v[0] - along[v[1]]) / steps[v[1]], 0, 1)])
+          .map(v => [lerp(path[v[0]][0], path[v[0] + 1][0], v[1]), lerp(path[v[0]][1], path[v[0] + 1][1], v[1]), path[v[0]][2]])
+
+        // Lets are lazy: only the one that's used gets computed.
+        let body = feeding ? walked : looped
+        let sway = sin(time * (3 + body[0][2] * 2) + i * 2)
+        let fin = mix(f.body, background, 0.25)
+
+        // Tail first, so the head lands on top.
+        for k in range(len(profile) - 1, -1, -1) {
+          let x = body[k][0]
+          let y = body[k][1]
+          // Heading, from the neighbouring points on the path
+          let hx0 = body[max(k - 1, 0)][0] - body[k + 1][0]
+          let hy0 = body[max(k - 1, 0)][1] - body[k + 1][1]
+          let hl = max(sqrt(hx0 * hx0 + hy0 * hy0), 0.001)
+          let hx = hx0 / hl
+          let hy = hy0 / hl
+          let px = floor(x / p) * p
+          let py = floor(y / p) * p
+          let h = profile[k]
+
+          if k == len(profile) - 1 {
+            // Tail: two lobes of small blocks fanning out, swinging with the swim.
+            for j in range(1, 5) {
+              for side in [-1, 1] {
+                let spread = j * 0.7 * side + sway * j * 0.4
+                let tx = floor((x - hx * j * p * 1.1 - hy * spread * p) / p) * p
+                let ty = floor((y - hy * j * p * 1.1 + hx * spread * p) / p) * p
+                rect(tx, ty, (j < 3 ? 2 : 1) * p, (j < 3 ? 2 : 1) * p, fill: fin)
+              }
+            }
+          }
+          if k == 2 {
+            // Pectoral fins: small blocks swept back from each side.
+            for side in [-1, 1] {
+              for j in range(1, 3) {
+                let out = h + j * 1.2 + sway * 0.4 * side
+                let fx = floor((x - hy * side * out * p - hx * (j * 1.3) * p) / p) * p
+                let fy = floor((y + hx * side * out * p - hy * (j * 1.3) * p) / p) * p
+                rect(fx, fy, (3 - j % 2) * p, (2 - j % 2) * p, fill: fin)
+              }
+            }
+          }
+          if h > 0 {
+            // A blocky disc: two overlapping rects make a pixel circle. Half a dp
+            // extra keeps seams from showing where p isn't whole device pixels.
+            rect(px - h * p, py - (h - 1) * p, (2 * h + 1) * p + 0.5, (2 * h - 1) * p + 0.5, fill: f.body)
+            rect(px - (h - 1) * p, py - h * p, (2 * h - 1) * p + 0.5, (2 * h + 1) * p + 0.5, fill: f.body)
+          } else {
+            rect(px, py, p, p, fill: f.body)
+          }
+          for sp in f.spots {
+            if sp[0] == k {
+              let sx = floor((x - hy * sp[1] * h * 0.4 * p) / p) * p
+              let sy = floor((y + hx * sp[1] * h * 0.4 * p) / p) * p
+              let sh = max(h - 1, 1)
+              rect(sx - sh * p, sy - (sh - 1) * p, (2 * sh + 1) * p, (2 * sh - 1) * p, fill: f.spot)
+              rect(sx - (sh - 1) * p, sy - sh * p, (2 * sh - 1) * p, (2 * sh + 1) * p, fill: f.spot)
+            }
+          }
+          if k == 0 {
+            for side in [-1, 1] {
+              rect(floor((x + hx * p - hy * side * 1.5 * p) / p) * p, floor((y + hy * p + hx * side * 1.5 * p) / p) * p, p, p, fill: background)
+            }
+          }
+        }
+      }
+
+      // The lily pad floats above the fish, drifting a pixel or two.
+      let drift = round(sin(time * 0.07) * 2) * p
+      for r in padRects {
+        rect(r[0] + drift, r[1], r[2], r[3], fill: r[4])
+      }
+    }
+  }
+}

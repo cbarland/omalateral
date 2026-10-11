@@ -13,3 +13,9 @@
 /.externalNativeBuild/
 /.cxx/
 *.apk
+**/build/
+**/.cxx/
+/build-integration*.log
+/build-icon.log
+*.keystore
+*.jks

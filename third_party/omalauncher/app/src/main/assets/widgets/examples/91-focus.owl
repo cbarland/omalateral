@@ -1,0 +1,48 @@
+widget "focus" {
+  page: 3
+  order: 2
+  size: 3x3
+  minSize: 3x2
+
+  meta { owl: 4 }
+
+  // No shell at all: state, a clock and buttons make a pomodoro timer.
+  source now = clock every 1s
+  state endsAt = 0 persist           // an absolute time, so a restart mid-session picks up where it was
+  state length = 25 * 60 persist
+  let left = endsAt > now ? endsAt - now : 0
+  let running = left > 0
+
+  // Runs when the time comes, even with the page off screen (the clock source pauses there).
+  at endsAt {
+    notify("focus", "${length / 60} minutes are up")
+    endsAt = 0
+  }
+
+  Column {
+    gap: 8
+    align: center
+    Box {
+      weight: 1
+      fill: width
+      align: center
+      Ring {
+        fill: true; thickness: 8
+        value: running ? left / length : 1
+        color: running ? accent : muted
+        animate value: tween(900ms, "linear")
+      }
+      Text {
+        text: running ? "${pad(floor(left / 60), 2, "0")}:${pad(left % 60, 2, "0")}" : "${length / 60} min"
+        style: title; align: center
+      }
+    }
+    Row {
+      gap: 6
+      justify: center
+      Button { text: running ? "stop" : "start"; onTap: endsAt = running ? 0 : now + length }
+      Button { text: "-5"; color: muted; onTap: length = max(length - 300, 300) }
+      Button { text: "+5"; color: muted; onTap: length = min(length + 300, 3600) }
+    }
+  }
+}

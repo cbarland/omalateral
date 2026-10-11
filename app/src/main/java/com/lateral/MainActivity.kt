@@ -79,6 +79,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     private lateinit var embeddedKeyboardView: EmbeddedFlorisKeyboardView
     private lateinit var embeddedKeyboardContainer: LinearLayout
     private lateinit var embeddedKeyboardStatus: TextView
+    private lateinit var phoneRoot: LinearLayout
     private lateinit var connectionText: TextView
     private lateinit var currentAppText: TextView
     private lateinit var inputDebugText: TextView
@@ -156,6 +157,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
                 command.setTextColor(InputSettings.accentColor)
                 command.background = outlinedBackground(InputSettings.accentOutlineColor())
             }
+            applyPhoneThemeColors()
             if (::embeddedKeyboardView.isInitialized) {
                 embeddedKeyboardView.keyboardTheme = lateralKeyboardTheme()
             }
@@ -546,9 +548,10 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         accentCommandViews.clear()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(9, 10, 11))
+            setBackgroundColor(InputSettings.theme.background)
             setPadding(dp(16), dp(12), dp(16), dp(12))
         }
+        phoneRoot = root
 
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
 
@@ -575,7 +578,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             textSize = 12f
             gravity = Gravity.CENTER_VERTICAL or Gravity.END
             typeface = Typeface.MONOSPACE
-            setTextColor(Color.rgb(150, 162, 166))
+            setTextColor(InputSettings.theme.darkForeground)
             setPadding(dp(8), 0, 0, 0)
             setOnClickListener { showControllerSettings() }
         }
@@ -621,7 +624,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         inputDebugText = TextView(this).apply {
             text = privilegedStatusText()
             visibility = View.VISIBLE
-            setTextColor(Color.rgb(150, 162, 166))
+            setTextColor(InputSettings.theme.darkForeground)
             typeface = Typeface.MONOSPACE
             gravity = Gravity.CENTER
         }
@@ -642,8 +645,8 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
             isSingleLine = true
             typeface = Typeface.MONOSPACE
             textSize = 15f
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.rgb(105, 119, 119))
+            setTextColor(InputSettings.theme.brightForeground)
+            setHintTextColor(InputSettings.theme.muted)
             visibility = View.GONE
             addTextChangedListener(SimpleTextWatcher { LauncherSearchSession.updateQuery(it) })
             setOnEditorActionListener { _, _, event ->
@@ -673,7 +676,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         embeddedKeyboardStatus = TextView(this).apply {
             typeface = Typeface.MONOSPACE
             textSize = 13f
-            setTextColor(Color.rgb(150, 162, 166))
+            setTextColor(InputSettings.theme.darkForeground)
             setPadding(dp(8), dp(6), dp(8), dp(6))
         }
         val embeddedKeyboardClose = TextView(this).apply {
@@ -782,16 +785,45 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     }
 
     private fun phoneLabel() = TextView(this).apply {
-        text = "LATERAL_"
+        text = "omalateral"
         textSize = 17f
         gravity = Gravity.CENTER_VERTICAL
         typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
         letterSpacing = .08f
-        setTextColor(Color.rgb(235, 240, 239))
+        setTextColor(InputSettings.theme.brightForeground)
+    }
+
+    private fun applyPhoneThemeColors() {
+        if (!::phoneRoot.isInitialized) return
+        val palette = InputSettings.theme
+        phoneRoot.setBackgroundColor(palette.background)
+        if (::connectionText.isInitialized) connectionText.setTextColor(palette.darkForeground)
+        if (::inputDebugText.isInitialized) inputDebugText.setTextColor(palette.darkForeground)
+        if (::embeddedKeyboardStatus.isInitialized) embeddedKeyboardStatus.setTextColor(palette.darkForeground)
+        if (::beastSearchField.isInitialized) {
+            beastSearchField.setTextColor(palette.brightForeground)
+            beastSearchField.setHintTextColor(palette.muted)
+        }
+        if (::phoneProxyClose.isInitialized) {
+            phoneProxyClose.setTextColor(palette.accent)
+            phoneProxyClose.background = outlinedBackground(palette.selection)
+        }
+        if (::workspaceNavigator.isInitialized) {
+            workspaceNavigator.setBackgroundColor(palette.darkBackground)
+            workspaceNavigator.invalidate()
+        }
+        if (::workspaceViewportSlider.isInitialized) {
+            workspaceViewportSlider.setBackgroundColor(palette.darkBackground)
+            workspaceViewportSlider.invalidate()
+        }
+        if (::trackpad.isInitialized) {
+            trackpad.setBackgroundColor(palette.darkBackground)
+            trackpad.invalidate()
+        }
     }
 
     private fun rule() = View(this).apply {
-        setBackgroundColor(Color.rgb(55, 66, 69))
+        setBackgroundColor(InputSettings.theme.muted)
     }.also { it.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)) }
 
     private fun addCommand(parent: LinearLayout, label: String, action: () -> Unit) {
@@ -812,7 +844,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     }
 
     private fun outlinedBackground(stroke: Int) = GradientDrawable().apply {
-        setColor(Color.rgb(15, 18, 19))
+        setColor(InputSettings.theme.darkerBackground)
         setStroke(dp(1), stroke)
     }
 

@@ -1,0 +1,19 @@
+.DS_Store
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.cxx/
+.kotlin/
+# fetched by scripts/fetch-proot.sh
+app/src/main/jniLibs/
+# fastlane
+fastlane/play-store-key.json
+fastlane/report.xml
+fastlane/README.md
+*.jks
+*.keystore
+keystore.properties
+# captured by scripts/collage-captures.sh
+store/collage/raw/

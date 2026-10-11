@@ -1,0 +1,1 @@
+First release: Omarchy themes and wallpapers, home screen widgets (including a koi pond, a pixel owl and a lava lamp) and the widget store, the Android app drawer, and optional Arch Linux with Linux apps, terminal widgets and coding agents.

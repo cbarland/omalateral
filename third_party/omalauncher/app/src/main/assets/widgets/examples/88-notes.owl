@@ -1,0 +1,26 @@
+widget "notes" {
+  page: 3
+  order: 3
+  size: 3x4
+  minSize: 2x2
+
+  meta { owl: 4; description: "Quick notes typed on the home screen; tap a note to remove it."; version: "1.0"; license: "MIT"; category: "productivity" }
+
+  // Kept by the launcher across restarts; no file, no shell.
+  state notes = [] persist
+
+  Column {
+    gap: 6
+    fill: true
+    Text { text: "notes"; style: muted }
+    Input { placeholder: "add a note"; clear: true; onSubmit: notes = value == "" ? notes : ([value] + notes).take(50) }
+    Column {
+      gap: 4
+      weight: 1
+      scroll: true
+      for note, i in notes {
+        Text { text: "- ${note}"; style: small; onTap: notes = notes.take(i) + notes.drop(i + 1) }
+      }
+    }
+  }
+}

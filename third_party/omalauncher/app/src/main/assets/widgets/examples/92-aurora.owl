@@ -1,0 +1,31 @@
+widget "aurora" {
+  page: 3
+  order: 3
+  size: 6x3
+  minSize: 3x1
+  padding: 0
+
+  // An AGSL shader (Android 13+). size and time are provided; declare your own
+  // uniforms and pass them in `uniforms`. Theme colors follow theme changes.
+  Box {
+    fill: true
+    align: center
+    Shader {
+      fallback: surface
+      uniforms: { a: accent, b: magenta }
+      code: """
+        uniform half4 a;
+        uniform half4 b;
+
+        half4 main(float2 p) {
+          float2 uv = p / size;
+          float w = sin(uv.x * 5.0 + time * 0.6) * 0.5 + 0.5;
+          float v = sin(uv.y * 3.0 - time * 0.4 + w * 2.5) * 0.5 + 0.5;
+          half4 c = mix(a, b, v);
+          return half4(c.rgb * (0.25 + 0.35 * w * v), 1.0);
+        }
+      """
+    }
+    Text { text: "omarchy"; style: huge; color: foreground; align: center }
+  }
+}

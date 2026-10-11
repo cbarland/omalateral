@@ -1,0 +1,24 @@
+widget "memory" {
+  page: 1
+  order: 2
+  size: 3x4
+  minSize: 2x2
+
+  requires { pacman: ["procps-ng", "gawk", "btop"] }
+
+  source mem = cmd("free -b | awk '/Mem:/ {print $2, $3}'") every 5s
+  let total = num(words(mem)[0])
+  let used = num(words(mem)[1])
+  let pct = total ? used / total * 100 : null
+  let hist = history(pct, 40) persist
+
+  onTap: terminal("btop")
+
+  Column {
+    Text { text: "memory"; style: muted }
+    Text { text: "${round(pct)}%"; style: title; color: pct > 85 ? red : foreground }
+    Progress { value: pct; color: pct > 85 ? red : accent; animate value: spring() }
+    Text { text: "${fmtBytes(used)} / ${fmtBytes(total)}"; style: small }
+    Sparkline { values: hist; min: 0; max: 100; color: green; area: true; fill: width; weight: 1 }
+  }
+}

@@ -1,0 +1,107 @@
+widget "breathe" {
+  page: 3
+  order: 3
+  size: 3x3
+  minSize: 2x2
+
+  meta { owl: 4 }
+
+  // Tap to start a session of about two minutes; tap again to stop. Phases are whole seconds.
+  let patterns = [
+    {name: "box", steps: [["in", 4], ["hold", 4], ["out", 4], ["hold", 4]]},
+    {name: "4-7-8", steps: [["in", 4], ["hold", 7], ["out", 8]]},
+    {name: "calm", steps: [["in", 4], ["out", 6]]},
+    {name: "coherent", steps: [["in", 5], ["out", 5]]}
+  ]
+  state pick = 2 persist              // calm
+  state startedAt = 0 persist          // Unix seconds, so a restart mid-session picks up where it was
+  source now = clock every 1s
+
+  let pattern = patterns[pick % len(patterns)]
+  let steps = pattern.steps
+  let cycle = sum(steps.map(s => s[1]))
+  let ends = range(len(steps)).map(n => sum(steps.take(n + 1).map(x => x[1])))
+  let rounds = ceil(120 / cycle)
+  let endsAt = startedAt > 0 ? startedAt + rounds * cycle : 0
+  let running = endsAt > now
+  let elapsed = running ? now - startedAt : 0
+
+  at endsAt { startedAt = 0 }
+
+  // Now: the step the countdown and label show.
+  let t = elapsed % cycle
+  let i = ends.indexOf(ends.find(e => e > t))
+  let step = steps[i]
+  let into = t - (i > 0 ? ends[i - 1] : 0)
+
+  // A second from now: where the circle should be by the next tick. Each tick eases it there
+  // over one second, so it moves smoothly without a frame clock, and nothing redraws while idle.
+  let t1 = running ? (elapsed + 1) % cycle : 0
+  let i1 = ends.indexOf(ends.find(e => e > t1))
+  let step1 = steps[i1]
+  let p1 = (t1 - (i1 > 0 ? ends[i1 - 1] : 0)) / step1[1]
+  let ease = 0.5 - cos(p1 * pi) / 2
+  let lastMove = steps.take(i1).filter(s => s[0] != "hold").map(s => s[0]).last() ?? "out"
+  let k = !running ? 0 : step1[0] == "in" ? ease : step1[0] == "out" ? 1 - ease : lastMove == "in" ? 1 : 0
+  let grow = lerp(0.42, 1, k)
+  let holding = running && step[0] == "hold"
+
+  onTap: startedAt = running ? 0 : now
+
+  Column {
+    gap: 4
+    align: center
+    Box {
+      weight: 1
+      fill: width
+      align: center
+      // the size of a full breath
+      Canvas {
+        fill: true
+        circle(width / 2, height / 2, min(width, height) / 2 - 4, stroke: alpha(border, 0.6), width: 1.5)
+      }
+      // drawn full size once; only its scale changes
+      Canvas {
+        fill: true
+        scale: grow
+        animate scale: tween(1s, "linear")
+        let cx = width / 2
+        let cy = height / 2
+        let rOuter = min(width, height) / 2 - 4
+        let r = rOuter * 0.88
+        circle(cx, cy, r + rOuter * 0.07, fill: alpha(accent, 0.10))
+        circle(cx, cy, r, fill: radial(cx, cy, r, [alpha(accent, 0.55), alpha(accent, 0.25)]))
+        circle(cx, cy, r, stroke: accent, width: 2)
+      }
+      // fills during a hold
+      Ring {
+        fill: true
+        thickness: 2
+        track: transparent
+        color: alpha(foreground, 0.7)
+        value: holding ? (into + 1) / step[1] : 0
+        animate value: tween(1s, "linear")
+        opacity: holding ? 1 : 0
+        scale: grow * 0.93
+        animate scale: tween(1s, "linear")
+      }
+      Column {
+        gap: 0
+        align: center
+        Text {
+          text: !running ? "start" : step[0] == "hold" ? "hold" : step[0] == "in" ? "inhale" : "exhale"
+          bold: true; align: center
+        }
+        if running {
+          Text { text: "${step[1] - into}"; style: small; color: alpha(foreground, 0.65); align: center }
+        }
+      }
+    }
+    // While idle, tapping the pattern switches to the next one.
+    Text {
+      text: running ? "${pattern.name}  ${floor(elapsed / cycle) + 1} of ${rounds}" : "${pattern.name}  ${join(steps.map(s => s[1]), "·")}  ›"
+      style: muted; align: center
+      onTap: pick = running ? pick : (pick + 1) % len(patterns)
+    }
+  }
+}

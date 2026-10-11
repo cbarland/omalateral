@@ -1,0 +1,1 @@
+Home now works in landscape: the grid turns on its side, with the recent apps and the bar in a rail beside it. Linux windows show up in Recents under their own name, like Terminal or btop, and coding agents with their logo.

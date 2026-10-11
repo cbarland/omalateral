@@ -1,0 +1,1 @@
+Fixes installing coding agents on some phones, like the Pixel 10: the install stopped with "tar: Cannot change mode" errors. Failed installs now show the whole error.

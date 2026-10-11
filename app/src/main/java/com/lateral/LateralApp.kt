@@ -8,7 +8,8 @@ import com.lateral.privileged.PrivilegedHotkeys
 import dev.patrickgold.florisboard.FlorisApplication
 import dev.patrickgold.florisboard.embedded.EmbeddedImeRuntime
 
-class LateralApp : FlorisApplication() {
+class LateralApp : FlorisApplication(), dev.omalauncher.RuntimeOwner {
+    override val runtime by lazy { dev.omalauncher.Runtime(this) }
     lateinit var agentController: AgentController
         private set
 

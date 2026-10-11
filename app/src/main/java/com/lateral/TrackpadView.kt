@@ -108,7 +108,7 @@ class TrackpadView(
         isFocusable = false
         isFocusableInTouchMode = false
         keepScreenOn = true
-        setBackgroundColor(0xFF0F1213.toInt())
+        setBackgroundColor(InputSettings.theme.darkBackground)
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -120,7 +120,7 @@ class TrackpadView(
         val outline = InputSettings.accentOutlineColor()
 
         paint.style = Paint.Style.FILL
-        paint.color = Color.rgb(11, 14, 15)
+        paint.color = InputSettings.theme.darkerBackground
         canvas.drawRoundRect(
             .5f,
             .5f,
@@ -131,13 +131,13 @@ class TrackpadView(
             paint,
         )
 
-        paint.color = Color.rgb(18, 26, 27)
+        paint.color = InputSettings.theme.background
         canvas.drawRect(0f, 0f, edgeWidth, height.toFloat(), paint)
         canvas.drawRect(width - edgeWidth, 0f, width.toFloat(), height.toFloat(), paint)
 
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = density
-        paint.color = Color.rgb(36, 49, 50)
+        paint.color = InputSettings.theme.lighterBackground
         canvas.drawRoundRect(
             .5f,
             .5f,
@@ -150,12 +150,12 @@ class TrackpadView(
         paint.color = outline
         canvas.drawLine(edgeWidth - edgeInset, edgeInset, edgeWidth - edgeInset, height - edgeInset, paint)
         canvas.drawLine(width - edgeWidth + edgeInset, edgeInset, width - edgeWidth + edgeInset, height - edgeInset, paint)
-        paint.color = Color.rgb(55, 72, 73)
+        paint.color = InputSettings.theme.muted
         canvas.drawLine(edgeWidth / 2f, edgeInset, edgeWidth / 2f, height - edgeInset, paint)
         canvas.drawLine(width - edgeWidth / 2f, edgeInset, width - edgeWidth / 2f, height - edgeInset, paint)
 
         paint.style = Paint.Style.FILL
-        paint.color = Color.rgb(121, 145, 145)
+        paint.color = InputSettings.theme.darkForeground
         paint.textSize = 10f * density
         paint.typeface = Typeface.MONOSPACE
         paint.textAlign = Paint.Align.CENTER
@@ -168,7 +168,7 @@ class TrackpadView(
         canvas.drawText("SCROLL", width - edgeWidth / 2, height / 2f, paint)
         canvas.restore()
 
-        paint.color = Color.rgb(66, 88, 89)
+        paint.color = InputSettings.theme.muted
         paint.textSize = 12f * density
         canvas.drawText("TOUCHPAD", width / 2f, height / 2f, paint)
     }

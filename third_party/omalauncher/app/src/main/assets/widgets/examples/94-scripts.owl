@@ -1,0 +1,57 @@
+widget "scripts" {
+  page: 4
+  order: 1
+  size: 6x3
+  minSize: 3x2
+
+  requires { pacman: ["jq"] }
+
+  // Every file in ~/.config/omalauncher/scripts is a row showing the first line it prints.
+  // A line of JSON like {"text": "3 failing", "color": "red"} sets the text and its color.
+  // Scripts run side by side, 5 s each at most; tap a row to run one in a terminal.
+  source rows = cmd("""
+    d=~/.config/omalauncher/scripts
+    if [ ! -d "$d" ]; then
+      mkdir -p "$d"
+      printf '#!/bin/sh\n# Every script in this folder is a row on the scripts widget.\necho "$(df -h --output=avail / | tail -1 | tr -d " ") free"\n' > "$d/disk.sh"
+    fi
+    t=$(mktemp -d)
+    i=0
+    for f in "$d"/*; do
+      [ -f "$f" ] || continue
+      i=$((i + 1))
+      ( cd ~; if [ -x "$f" ]; then timeout 5 "$f"; else timeout 5 bash "$f"; fi 2>&1 | head -1 > "$t/$i" ) &
+    done
+    wait
+    i=0
+    for f in "$d"/*; do
+      [ -f "$f" ] || continue
+      i=$((i + 1))
+      jq -nc --arg p "$f" --rawfile o "$t/$i" '{path: $p, name: ($p | split("/") | last | sub("\\.[a-z]+$"; "")), out: ($o | rtrimstr("\n"))}'
+    done | jq -sc .
+    rm -rf "$t"
+  """) every 30s json timeout 20s
+
+  onTap: terminal("cd ~/.config/omalauncher/scripts && ls", "scripts")
+
+  Column {
+    gap: 4
+    Text { text: "scripts"; style: muted }
+    if rows != null && len(rows) == 0 {
+      Text { text: "put scripts in ~/.config/omalauncher/scripts"; style: small; color: muted }
+    }
+    Column {
+      scroll: true
+      weight: 1
+      gap: 4
+      for r in rows key r.path {
+        let j = startsWith(r.out, "{") ? parseJson(r.out) : null
+        Row {
+          onTap: terminal(r.path, r.name)
+          Text { text: r.name; fontSize: 12; color: muted; width: 88; maxLines: 1 }
+          Text { text: j.text ?? r.out; fontSize: 12; font: mono; maxLines: 1; weight: 1; color: j.color ?? foreground }
+        }
+      }
+    }
+  }
+}

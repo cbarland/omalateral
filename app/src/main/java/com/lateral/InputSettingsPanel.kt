@@ -165,64 +165,63 @@ object InputSettingsPanel {
             { InputSettings.setTaskbarAlignment(context, it) },
         )
         val personalizationTitle = TextView(context).apply {
-            text = "Personalization"
+            text = "Personalization / Omarchy theme"
             typeface = Typeface.MONOSPACE
             setTextColor(InputSettings.accentColor)
             setPadding(0, dp(16), 0, dp(4))
         }
-        val accentValueLabel = TextView(context).apply {
+        val themeValueLabel = TextView(context).apply {
             typeface = Typeface.MONOSPACE
-            setTextColor(Color.rgb(210, 220, 218))
+            setTextColor(InputSettings.theme.foreground)
+            setPadding(0, 0, 0, dp(4))
         }
-        val accentSwatch = View(context).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(44), dp(28)).apply {
-                setMargins(0, 0, dp(10), 0)
+        val themeButtons = linkedMapOf<String, TextView>()
+        lateinit var refreshThemeWidgets: () -> Unit
+        fun themeButton(theme: OmarchyTheme) = TextView(context).apply {
+            text = theme.name.uppercase()
+            gravity = android.view.Gravity.CENTER
+            typeface = Typeface.MONOSPACE
+            textSize = 11f
+            isAllCaps = true
+            isClickable = true
+            setPadding(dp(6), dp(10), dp(6), dp(10))
+            setOnClickListener {
+                InputSettings.setTheme(context, theme)
+                refreshThemeWidgets()
             }
+            themeButtons[theme.id] = this
         }
-        fun updateAccentPreview(color: Int = InputSettings.accentColor) {
-            accentValueLabel.text = "Accent  ${colorHex(color)}   hue ${"%.0f".format(InputSettings.accentHue)}°   saturation ${"%.0f".format(InputSettings.accentSaturation * 100)}%"
-            accentSwatch.background = GradientDrawable().apply {
-                setColor(color)
-                setStroke(dp(1), Color.rgb(210, 220, 218))
-                cornerRadius = dp(4).toFloat()
+        val themeGrid = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(4), 0, 0)
+        }
+        OmarchyThemes.all.chunked(2).forEach { rowThemes ->
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, dp(2), 0, dp(2))
             }
-        }
-        lateinit var refreshAccentWidgets: () -> Unit
-        val accentWheel = AccentColorWheelView(context).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(260),
-            ).apply { setMargins(0, dp(4), 0, dp(4)) }
-            setSelection(InputSettings.accentHue, InputSettings.accentSaturation)
-            onColorChanged = { hue, saturation, color ->
-                InputSettings.setAccent(context, hue, saturation)
-                updateAccentPreview(InputSettings.accentColor)
-                refreshAccentWidgets()
+            rowThemes.forEach { theme ->
+                row.addView(themeButton(theme), LinearLayout.LayoutParams(0, dp(42), 1f).apply {
+                    setMargins(0, 0, dp(4), 0)
+                })
             }
+            if (rowThemes.size == 1) row.addView(View(context), LinearLayout.LayoutParams(0, dp(42), 1f))
+            themeGrid.addView(row)
         }
-        val accentPreview = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER_VERTICAL
-            addView(accentSwatch)
-            addView(accentValueLabel)
-        }
-        val resetAccent = TextView(context).apply {
-            text = "reset to cyan default"
+        val resetTheme = TextView(context).apply {
+            text = "reset to Tokyo Night"
             typeface = Typeface.MONOSPACE
             setTextColor(InputSettings.accentColor)
-            setPadding(0, dp(4), 0, dp(8))
+            setPadding(0, dp(6), 0, dp(8))
             setOnClickListener {
-                InputSettings.resetAccent(context)
-                accentWheel.setSelection(InputSettings.accentHue, InputSettings.accentSaturation)
-                updateAccentPreview()
-                refreshAccentWidgets()
+                InputSettings.resetTheme(context)
+                refreshThemeWidgets()
             }
         }
-        updateAccentPreview()
         val note = TextView(context).apply {
-            text = "Accent changes apply immediately to the phone and Beast and are saved with LATERAL_. Brightness stays matched to the cyan icon while hue and saturation are adjustable."
+            text = "Omarchy themes apply their semantic palette to PhoneUI, BeastUI, controls, and the embedded keyboard. The selected theme is saved with LATERAL_."
             textSize = 12f
-            setTextColor(Color.rgb(210, 220, 218))
+            setTextColor(InputSettings.theme.foreground)
             setPadding(0, dp(10), 0, 0)
         }
         val about = TextView(context).apply {
@@ -245,13 +244,25 @@ object InputSettingsPanel {
                 )
             }
         }
-        refreshAccentWidgets = {
-            val accent = InputSettings.accentColor
-            personalizationTitle.setTextColor(accent)
-            resetAccent.setTextColor(accent)
-            about.setTextColor(accent)
+        refreshThemeWidgets = {
+            val selected = InputSettings.theme
+            themeValueLabel.text = "${selected.name}  ·  ${selected.mode.name.lowercase()}  ·  accent ${colorHex(selected.accent)}"
+            themeValueLabel.setTextColor(selected.foreground)
+            personalizationTitle.setTextColor(selected.accent)
+            resetTheme.setTextColor(selected.accent)
+            about.setTextColor(selected.accent)
+            themeButtons.forEach { (id, button) ->
+                val theme = OmarchyThemes.byId(id)
+                val chosen = theme.id == selected.id
+                button.setTextColor(if (chosen) theme.brightForeground else theme.foreground)
+                button.background = GradientDrawable().apply {
+                    setColor(theme.lighterBackground)
+                    setStroke(dp(if (chosen) 2 else 1), if (chosen) theme.accent else theme.selection)
+                    cornerRadius = dp(3).toFloat()
+                }
+            }
         }
-        refreshAccentWidgets()
+        refreshThemeWidgets()
         panel.addView(sensitivityLabel)
         panel.addView(sensitivity)
         panel.addView(scrollSensitivity)
@@ -264,9 +275,9 @@ object InputSettingsPanel {
         panel.addView(toolbarAlignment)
         panel.addView(taskbarAlignment)
         panel.addView(personalizationTitle)
-        panel.addView(accentWheel)
-        panel.addView(accentPreview)
-        panel.addView(resetAccent)
+        panel.addView(themeValueLabel)
+        panel.addView(themeGrid)
+        panel.addView(resetTheme)
         panel.addView(note)
         panel.addView(about)
         val scrollPanel = ScrollView(context).apply { addView(panel) }

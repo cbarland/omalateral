@@ -1,0 +1,19 @@
+widget "system" {
+  page: 2
+  order: 4
+  size: 6x3
+  minSize: 3x2
+
+  requires { pacman: ["procps-ng", "fastfetch"] }
+
+  source info = cmd("printf '{\"kernel\":\"%s\",\"packages\":%s,\"up\":\"%s\"}' \"$(uname -r | cut -d- -f1)\" \"$(pacman -Q | wc -l)\" \"$(uptime -p | sed 's/up //')\"") every 10m json
+
+  onTap: terminal("fastfetch")
+
+  Column {
+    Text { text: "arch linux arm"; style: muted }
+    Text { text: "kernel ${info.kernel}"; style: small }
+    Text { text: "${info.packages} packages"; style: small }
+    Text { text: "up ${info.up}"; style: small }
+  }
+}
