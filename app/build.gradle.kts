@@ -56,8 +56,8 @@ android {
     defaultConfig {
         minSdk = 29
         targetSdk = 37
-        versionCode = 6
-        versionName = "0.1.0-alpha06"
+        versionCode = 7
+        versionName = "0.1.0-alpha07"
         buildConfigField("boolean", "VITURE_SDK_ENABLED", vitureSdkEnabled.toString())
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

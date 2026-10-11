@@ -1139,6 +1139,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         if (::root.isInitialized) root.setBackgroundColor(InputSettings.theme.darkerBackground)
         if (::toolbar.isInitialized) toolbar.setBackgroundColor(InputSettings.theme.background)
         if (::taskbar.isInitialized) taskbar.setBackgroundColor(InputSettings.theme.darkBackground)
+        if (::viewportMap.isInitialized) viewportMap.invalidate()
         cards.values.forEach(BeastTaskCard::refreshAccent)
         if (::taskbarPrevious.isInitialized) {
             taskbarPrevious.setTextColor(InputSettings.accentColor)

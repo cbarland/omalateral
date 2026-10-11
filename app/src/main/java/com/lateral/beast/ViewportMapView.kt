@@ -2,9 +2,9 @@ package com.lateral.beast
 
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.view.View
+import com.lateral.InputSettings
 
 /** Draws the visible fraction of the task strip; the taskbar remains a true workspace map. */
 class ViewportMapView(context: Context) : View(context) {
@@ -19,7 +19,8 @@ class ViewportMapView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        paint.color = Color.rgb(46, 56, 57)
+        val palette = InputSettings.theme
+        paint.color = palette.selection
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
         if (contentWidthPx <= 0 || viewportWidthPx <= 0) return
         val visibleFraction = (viewportWidthPx.toFloat() / contentWidthPx).coerceIn(.04f, 1f)
@@ -27,7 +28,7 @@ class ViewportMapView(context: Context) : View(context) {
         val maxContentScroll = (contentWidthPx - viewportWidthPx).coerceAtLeast(1)
         val progress = (scrollOffsetPx.toFloat() / maxContentScroll).coerceIn(0f, 1f)
         val left = progress * (width - indicatorWidth)
-        paint.color = Color.rgb(164, 211, 197)
+        paint.color = palette.accent
         canvas.drawRect(left, 0f, left + indicatorWidth, height.toFloat(), paint)
     }
 }
