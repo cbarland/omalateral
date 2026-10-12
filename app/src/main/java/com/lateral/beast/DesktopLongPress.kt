@@ -27,9 +27,22 @@ internal class DesktopLongPress {
             target = null
             dispatch(view, if (stillValid()) MotionEvent.ACTION_UP else MotionEvent.ACTION_CANCEL)
         }
-        finish = release
         // A backdated DOWN followed immediately by UP does not trigger Compose's timer.
-        view.postDelayed(release, ViewConfiguration.getLongPressTimeout().toLong() + 150L)
+        // Compose's pointer timeout itself yields before completing. If rendering blocks
+        // the main thread past both deadlines, a single delayed UP can beat that final
+        // yield. Arm the release in a second queue turn so the timeout can complete first.
+        val settle = Runnable {
+            finish = release
+            view.postDelayed(release, 150L)
+        }
+        // DOWN can enqueue the Compose coroutine that starts its timeout. Start our
+        // clock only after that queued work, including when the caller blocks this turn.
+        val arm = Runnable {
+            finish = settle
+            view.postDelayed(settle, ViewConfiguration.getLongPressTimeout().toLong())
+        }
+        finish = arm
+        view.post(arm)
     }
 
     fun cancel() {

@@ -199,6 +199,13 @@ class TaskSurfaceView @JvmOverloads constructor(
             scheduleFrameWatchdog(generation)
             return
         }
+        // A cold launch can take longer than the frame watchdog. Until reconciliation
+        // binds its Android task ID, replacing this display would reparent the first
+        // launch and start a duplicate instead of restoring that exact task.
+        if (launchSent && task?.androidTaskId == null) {
+            scheduleFrameWatchdog(generation)
+            return
+        }
         val surface = outputSurface?.takeIf(Surface::isValid) ?: return
         if (frameRecoveryAttempts++ < MAX_FRAME_REATTACH_ATTEMPTS) {
             if (!PrivilegedService.ensureHostedDisplayImeRouting(id)) {

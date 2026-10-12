@@ -117,6 +117,16 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private lateinit var workspaceScroll: HorizontalScrollView
     private lateinit var taskStrip: LinearLayout
     private lateinit var toolbar: FrameLayout
+    private data class ToolbarRenderKey(
+        val theme: com.lateral.OmarchyTheme,
+        val elementScale: Float,
+        val fontScale: Float,
+        val densityDpi: Int,
+        val alignment: BarAlignment,
+        val hasDesktop: Boolean,
+        val shared: Boolean,
+    )
+    private var toolbarRenderKey: ToolbarRenderKey? = null
     private lateinit var taskbar: FrameLayout
     private lateinit var taskbarScroll: HorizontalScrollView
     private lateinit var taskbarContent: LinearLayout
@@ -1503,18 +1513,18 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     /** Top bar contains workspace navigation and settings; the app strip stays below. */
     private fun renderToolbar() {
+        val key = ToolbarRenderKey(InputSettings.theme, uiElementScale, uiFontScale,
+            resources.displayMetrics.densityDpi, InputSettings.toolbarAlignment, omaDesktop != null, sharedDesktop)
+        // Task reconciliation/focus changes do not change these controls. Rebuilding
+        // them on every task update creates an unmeasured frame that drops mouse DOWN.
+        if (toolbar.childCount > 0 && toolbarRenderKey == key) return
+        toolbarRenderKey = key
         toolbar.removeAllViews()
         val controls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(InputSettings.theme.darkBackground)
         }
-        if (omaDesktop != null) controls.addView(label("DESKTOP", TOOLBAR_TEXT_SIZE, ACCENT).apply {
-            gravity = Gravity.CENTER
-            setPadding(uiDp(8), 0, uiDp(8), 0)
-            contentDescription = "Open apps"
-            setBeastClick(::showOmaDesktop)
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, uiDp(28)))
         controls.addView(label("+APPS", TOOLBAR_TEXT_SIZE, ACCENT).apply {
             gravity = Gravity.CENTER
             setPadding(uiDp(8), 0, uiDp(8), 0)
@@ -1546,7 +1556,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         controls.addView(label("MIN ALL", TOOLBAR_TEXT_SIZE, ACCENT).apply {
             gravity = Gravity.CENTER
             setPadding(uiDp(8), 0, uiDp(8), 0)
-            setBeastClick(WorkspaceState::minimizeAll)
+            setBeastClick(::showOmaDesktop)
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, uiDp(28)))
         controls.addView(label("CLOSE ALL", TOOLBAR_TEXT_SIZE, InputSettings.theme.danger).apply {
             gravity = Gravity.CENTER
@@ -1559,7 +1569,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             contentDescription = "Capture full external display"
             setBeastClick(::captureFullDisplay)
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, uiDp(28)))
-        controls.addView(label("→DISPLAY", TOOLBAR_TEXT_SIZE, ACCENT).apply {
+        controls.addView(label("DISPLAY", TOOLBAR_TEXT_SIZE, ACCENT).apply {
             gravity = Gravity.CENTER
             setPadding(uiDp(10), 0, uiDp(10), 0)
             setBeastClick(::showExternalDisplaySettings)

@@ -117,6 +117,9 @@ class OmaDesktop(
     override fun themes() { state.styleOpen = true }
 
     override fun dismissPanels() {
+        // A queued Compose prompt request can otherwise refocus search after the
+        // outside click has dismissed it, reopening a drawer over the taskbar.
+        state.promptRequest = null
         editor?.let { DesktopTextInputSession.release(it) }
         state.closeNow()
         state.closeScreens()

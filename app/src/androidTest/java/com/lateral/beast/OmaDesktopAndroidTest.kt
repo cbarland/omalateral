@@ -57,7 +57,13 @@ class OmaDesktopAndroidTest {
                 scenario.onActivity { assertEquals("catppuccin", InputSettings.theme.id) }
                 val copied = CountDownLatch(1)
                 var result = -1
-                val image = Bitmap.createBitmap(1920, 1080, Bitmap.Config.ARGB_8888)
+                var captureWidth = 0
+                var captureHeight = 0
+                scenario.onActivity { activity ->
+                    captureWidth = activity.window.decorView.width
+                    captureHeight = activity.window.decorView.height
+                }
+                val image = Bitmap.createBitmap(captureWidth, captureHeight, Bitmap.Config.ARGB_8888)
                 scenario.onActivity { activity ->
                     PixelCopy.request(activity.window, image, { result = it; copied.countDown() }, Handler(Looper.getMainLooper()))
                 }
@@ -81,7 +87,7 @@ class OmaDesktopAndroidTest {
                 Thread.sleep(500)
                 val tileCopied = CountDownLatch(1)
                 var tileResult = -1
-                val tileImage = Bitmap.createBitmap(1920, 1080, Bitmap.Config.ARGB_8888)
+                val tileImage = Bitmap.createBitmap(captureWidth, captureHeight, Bitmap.Config.ARGB_8888)
                 scenario.onActivity { activity ->
                     PixelCopy.request(activity.window, tileImage, { tileResult = it; tileCopied.countDown() }, Handler(Looper.getMainLooper()))
                 }
@@ -113,7 +119,7 @@ class OmaDesktopAndroidTest {
                     assertTrue(field<View>(activity, "fullscreenLayer").isShown)
                     assertSame(desktop, field<View>(activity, "launcher"))
                     WorkspaceState.setMode(task.id, PresentationMode.PHONE)
-                    activity.javaClass.getDeclaredMethod("showOmaDesktop").apply { isAccessible = true }.invoke(activity)
+                    assertTrue(checkNotNull(findLabel(field(activity, "toolbar"), "MIN ALL")).performClick())
                     assertEquals(TaskPlacement.BEAST_MINIMIZED, task.placement)
                     assertEquals(0, field<ViewGroup>(activity, "taskStrip").childCount)
                     assertTrue(desktop.isShown)
@@ -126,6 +132,14 @@ class OmaDesktopAndroidTest {
             reader.close()
             instrumentation.uiAutomation.dropShellPermissionIdentity()
         }
+    }
+
+    private fun findLabel(root: View, text: String): android.widget.TextView? {
+        if (root is android.widget.TextView && root.text.toString() == text) return root
+        if (root is ViewGroup) for (i in 0 until root.childCount) {
+            findLabel(root.getChildAt(i), text)?.let { return it }
+        }
+        return null
     }
 
     private fun <T> field(activity: BeastActivity, name: String): T {

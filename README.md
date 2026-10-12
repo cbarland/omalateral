@@ -30,7 +30,7 @@ See the [upstream proposal](https://github.com/SimonSchubert/omalauncher/issues/
 
 ## Screenshots
 
-Actual captures from the alpha06 Android 15 emulator validation, using the
+Actual captures from the alpha07 Android 15 emulator validation, using the
 Catppuccin theme and an external display. These are not mockups or evidence of
 compatibility with every physical phone/display.
 
@@ -39,7 +39,7 @@ compatibility with every physical phone/display.
 The embedded Omalauncher home stays behind the workspace: calendar/weather,
 system information, optional terminal, and animated OWL widgets.
 
-![Omalauncher home in the omalateral external workspace, with Catppuccin colors and OWL widgets](docs/images/omalateral-alpha06/desktop.png)
+![Omalauncher home in the omalateral external workspace, with Catppuccin colors and OWL widgets](docs/images/omalateral-alpha07/desktop.png)
 
 <details>
 <summary>App-tile layering and the theme-install dialog</summary>
@@ -47,14 +47,14 @@ system information, optional terminal, and animated OWL widgets.
 The window decorator and numbered taskbar sit above the home. The empty
 **TEST TILE** below is a validation fixture, not a running third-party app.
 
-![Test app tile above the embedded desktop, with window controls and a numbered taskbar](docs/images/omalateral-alpha06/app-tile.png)
+![Test app tile above the embedded desktop, with window controls and a numbered taskbar](docs/images/omalateral-alpha07/app-tile.png)
 
 The pointer stays above the theme-install dialog. This is a capture of the
 dialog's own window; the black area is not the composed desktop. Text is entered
 using the phone keyboard, which is on the other display and is not pictured.
 The example URL is test input, not a theme recommendation.
 
-![Theme-install dialog with the workspace pointer visible above its URL field](docs/images/omalateral-alpha06/theme-dialog.png)
+![Theme-install dialog with the workspace pointer visible above its URL field](docs/images/omalateral-alpha07/theme-dialog.png)
 
 </details>
 
@@ -82,13 +82,13 @@ The example URL is test input, not a theme recommendation.
      authorize **omalateral**, not a separate LATERAL installation.
 
 4. Use **+APPS** on the external top bar, or **apps** on PhoneUI, to launch an
-   Android app into the workspace. Use **DESKTOP** to minimize the app tiles and
+   Android app into the workspace. Use **MIN ALL** to minimize the app tiles and
    return to the home/widgets; select a numbered task tab to return to an app.
 
 You do **not** need standalone Omalauncher or a Linux installation to start using
 the embedded home. Features marked **needs Linux** are optional and experimental.
 The inherited physical-hardware baseline is Nubia NX789J / Android 15 with VITURE
-Beast; alpha06's final validation was on an Android API 35 emulator with an
+Beast; alpha07's validation was on an Android API 35 emulator with an
 external display. Other hardware is not guaranteed to work.
 
 ## How to use
@@ -112,15 +112,14 @@ external display. Other hardware is not guaranteed to work.
 
 | Control | Action |
 | --- | --- |
-| `DESKTOP` | Minimize app tiles and reveal the embedded home. |
 | `+APPS` | Open the app drawer and launch apps into the workspace. |
 | `WIDGETS` | Open Omalauncher's widget controls. |
 | `THEMES` | Browse/select themes or open the theme-install dialog. Bundled themes synchronize with PhoneUI and BeastUI. |
 | `OMA: LOCAL` | Show desktop connection status; the current runtime belongs to omalateral. |
-| `SHOW ALL` / `MIN ALL` | Restore workspace apps / minimize them without closing their tasks. |
+| `SHOW ALL` / `MIN ALL` | Restore workspace apps / minimize them and reveal the home without closing their tasks. |
 | `CLOSE ALL` | Close managed app tasks. Use this only when you intend to close them. |
 | `CAPTURE` | Save the BeastUI window as a PNG in Gallery under `Pictures/LATERAL_`. |
-| `→DISPLAY` | Open external-display information and display/profile controls. |
+| `DISPLAY` | Open external-display information and display/profile controls. |
 | `SETTINGS` | Open general input and appearance settings. |
 
 The small arrows at the ends of the top-bar control group reveal controls that
@@ -138,7 +137,7 @@ for general settings; **apps** opens a phone-side chooser for workspace apps.
   presentation rather than closing the app.
 - `cap` captures the focused app surface without workspace chrome; `x` closes
   that Android task, not every instance of its package.
-- The home stays mounted underneath app tiles. **DESKTOP** reveals it, while
+- The home stays mounted underneath app tiles. **MIN ALL** reveals it, while
   **WIDGETS**, **THEMES**, and **+APPS** open their panels above the tiles.
 
 ### If something does not work

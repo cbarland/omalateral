@@ -98,7 +98,11 @@ class OmaPopupInputAndroidTest {
             }
             val beast = checkNotNull(external)
             await("Embedded runtime startup") { (context.applicationContext as RuntimeOwner).runtime.widgets.specs.count { it.program != null } >= 3 }
-            instrumentation.waitForIdleSync()
+            // Animated OWL widgets can keep the main queue non-idle indefinitely
+            // on the emulator. Wait for the required layout, not global idleness.
+            await("External desktop laid out") {
+                beast.window.decorView.isLaidOut && !beast.window.decorView.isLayoutRequested
+            }
             Thread.sleep(700) // Initial theme synchronization may rebuild the desktop once.
             onMain {
                 // This regression needs no privileged helper. Dismiss its normal setup prompt,

@@ -77,15 +77,40 @@ class BeastUsbBootstrapUiAndroidTest {
             }
             Thread.sleep(1500)
             assertEquals(displayId, beast?.display?.displayId)
+            instrumentation.runOnMainSync {
+                val original = beast!!.window.callback
+                beast!!.window.callback = object : android.view.Window.Callback by original {
+                    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+                        val result = original.dispatchTouchEvent(event)
+                        android.util.Log.i("BeastUiGate", "delivered action=${event.actionMasked} button=${event.buttonState} x=${event.rawX} y=${event.rawY} handled=$result")
+                        if (!result) {
+                            val control = findTextView(beast!!.window.decorView, "MIN ALL")
+                            val bounds = android.graphics.Rect()
+                            val visible = control?.getGlobalVisibleRect(bounds)
+                            android.util.Log.i("BeastUiGate", "unhandled MIN ALL bounds=$bounds visible=$visible attached=${control?.isAttachedToWindow} clickable=${control?.isClickable} shown=${control?.isShown} root=${field(beast!!, "root").width}x${field(beast!!, "root").height}")
+                        }
+                        return result
+                    }
+                }
+            }
             fun launcher() = field(checkNotNull(beast), "launcher")
+            fun drawer(): dev.omalauncher.ui.LauncherState {
+                val desktop = beast!!.javaClass.getDeclaredField("omaDesktop").apply { isAccessible = true }.get(beast)
+                return desktop.javaClass.getDeclaredField("state").apply { isAccessible = true }.get(desktop) as dev.omalauncher.ui.LauncherState
+            }
+            // Home is always visible. Wait for the actual drawer/keyboard transition,
+            // not the embedded home View's visibility (which used to pass immediately).
+            fun launcherOpen() = launcher().translationZ > 0f && drawer().drawer.value > .99f
+            fun launcherClosed() = launcher().translationZ == 0f && drawer().drawer.value == 0f &&
+                drawer().promptRequest == null && !LauncherSearchSession.active && !DesktopTextInputSession.active
             val openApps = findTextView(checkNotNull(beast).window.decorView, "+APPS")
             assertNotNull("Beast +APPS control", openApps)
 
             // Use a real view touch sequence routed through Android's input dispatcher.
             tapView(checkNotNull(beast), checkNotNull(openApps))
-            waitUntil("launcher opens") { launcher().visibility == View.VISIBLE }
+            waitUntil("launcher opens") { launcherOpen() }
             tapView(checkNotNull(beast), checkNotNull(findTextView(checkNotNull(beast).window.decorView, "+APPS")))
-            waitUntil("launcher closes, desktop stays visible") { launcher().translationZ == 0f && !LauncherSearchSession.active }
+            waitUntil("launcher closes, desktop stays visible") { launcherClosed() }
 
             instrumentation.uiAutomation.serviceInfo = instrumentation.uiAutomation.serviceInfo.apply {
                 flags = flags or android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
@@ -117,11 +142,11 @@ class BeastUsbBootstrapUiAndroidTest {
                 waitUntil("minimize cycle $cycle") { first.minimized && second.minimized }
                 for (task in listOf(first, second)) {
                     tapView(checkNotNull(beast), checkNotNull(findTextView(field(checkNotNull(beast), "taskTabs"), "%02d".format(WorkspaceState.tasks.indexOfFirst { it.id == task.id } + 1))))
-                    waitUntil("restore ${task.shortLabel} cycle $cycle") { !task.minimized && WorkspaceState.focusedTaskId == task.id }
+                    waitUntil("restore ${task.shortLabel} id=${task.id} cycle $cycle") { !task.minimized && WorkspaceState.focusedTaskId == task.id }
                     tapView(checkNotNull(beast), checkNotNull(findTextView(checkNotNull(beast).window.decorView, "+APPS")))
-                    waitUntil("launcher opens after restore") { launcher().visibility == View.VISIBLE }
+                    waitUntil("launcher opens after restore") { launcherOpen() }
                     tapView(checkNotNull(beast), checkNotNull(findTextView(checkNotNull(beast).window.decorView, "+APPS")))
-                    waitUntil("launcher dismisses") { launcher().translationZ == 0f && !LauncherSearchSession.active }
+                    waitUntil("launcher dismisses") { launcherClosed() }
                     checkPhoneTouch()
                 }
             }
@@ -154,7 +179,17 @@ class BeastUsbBootstrapUiAndroidTest {
             if (ready) return
             Thread.sleep(100)
         }
-        fail("Timed out: $label; tasks=${WorkspaceState.tasks.map { "${it.label}:${it.placement}:${it.androidTaskId}" }}")
+        var launcherState = "unavailable"
+        instrumentation.runOnMainSync {
+            val activity = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+                .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED).filterIsInstance<BeastActivity>().firstOrNull()
+            if (activity != null) {
+                val desktop = activity.javaClass.getDeclaredField("omaDesktop").apply { isAccessible = true }.get(activity)
+                val state = desktop.javaClass.getDeclaredField("state").apply { isAccessible = true }.get(desktop) as dev.omalauncher.ui.LauncherState
+                launcherState = "z=${field(activity, "launcher").translationZ} drawer=${state.drawer.value}/${state.drawer.targetValue} pending=${state.promptRequest} search=${LauncherSearchSession.active} editor=${DesktopTextInputSession.active}"
+            }
+        }
+        fail("Timed out: $label; launcher=$launcherState; focused=${WorkspaceState.focusedTaskId}; tasks=${WorkspaceState.tasks.map { "${it.id}:${it.label}:${it.placement}:${it.androidTaskId}" }}")
     }
     private fun field(activity: android.app.Activity, name: String): View =
         activity.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(activity) as View
@@ -185,7 +220,9 @@ class BeastUsbBootstrapUiAndroidTest {
         if (activity is BeastActivity) {
             var handled = false
             instrumentation.runOnMainSync {
+                val launcherBefore = activity.javaClass.getDeclaredField("launcherActive").apply { isAccessible = true }.get(activity)
                 handled = BeastInputRouter.click(activity.display!!.displayId, rect.centerX(), rect.centerY(), MotionEvent.BUTTON_PRIMARY)
+                android.util.Log.i("BeastUiGate", "tap=${(view as? android.widget.TextView)?.text} rect=$rect launcherBefore=$launcherBefore handled=$handled focused=${WorkspaceState.focusedTaskId} tasks=${WorkspaceState.tasks.map { "${it.id}:${it.placement}" }}")
             }
             if (!handled) {
                 PrivilegedService.clickMouse(activity.display!!.displayId, rect.centerX(), rect.centerY(), MotionEvent.BUTTON_PRIMARY)

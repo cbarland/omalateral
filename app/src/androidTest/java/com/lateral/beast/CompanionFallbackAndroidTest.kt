@@ -54,9 +54,28 @@ class CompanionFallbackAndroidTest {
                     val text = labels(toolbar)
                     assertTrue(text.contains("+APPS"))
                     assertTrue(text.contains("WIDGETS"))
-                    assertTrue(text.contains("DESKTOP"))
+                    assertFalse(text.contains("DESKTOP"))
+                    assertTrue(text.contains("MIN ALL"))
+                    assertTrue(text.contains("DISPLAY"))
+                    assertFalse(text.contains("→DISPLAY"))
                     assertTrue(text.contains("THEMES"))
                     assertTrue(text.contains("OMA: LOCAL"))
+                    val controls = (toolbar as ViewGroup).getChildAt(0)
+                    fun refreshToolbar() = activity.javaClass.getDeclaredMethod("renderToolbar")
+                        .apply { isAccessible = true }.invoke(activity)
+                    refreshToolbar()
+                    assertSame("Task refreshes preserve measured toolbar controls", controls, toolbar.getChildAt(0))
+                    val metrics = activity.resources.displayMetrics
+                    val originalDensity = metrics.densityDpi
+                    try {
+                        // Simulate a density configuration update without changing the emulator.
+                        metrics.densityDpi = originalDensity + 1
+                        refreshToolbar()
+                        assertNotSame("Density changes invalidate toolbar geometry", controls, toolbar.getChildAt(0))
+                    } finally {
+                        metrics.densityDpi = originalDensity
+                        refreshToolbar()
+                    }
                     val launcher = field("launcher") as View
                     assertEquals(View.VISIBLE, launcher.visibility)
                     activity.javaClass.getDeclaredMethod("setLauncherActive", Boolean::class.javaPrimitiveType)
@@ -65,6 +84,15 @@ class CompanionFallbackAndroidTest {
                     activity.javaClass.getDeclaredMethod("hideLauncher").apply { isAccessible = true }.invoke(activity)
                     assertEquals(View.VISIBLE, launcher.visibility)
                     assertEquals(0f, launcher.translationZ)
+                    // Dismiss before Compose consumes the search request: it must not
+                    // refocus the prompt and reopen the drawer on a later frame.
+                    val desktop = field("omaDesktop") as OmaDesktop
+                    val state = desktop.javaClass.getDeclaredField("state").apply { isAccessible = true }
+                        .get(desktop) as dev.omalauncher.ui.LauncherState
+                    desktop.search("", false)
+                    assertNotNull(state.promptRequest)
+                    desktop.dismissPanels()
+                    assertNull("Dismiss cancels pending prompt activation", state.promptRequest)
                 }
             }
         } finally {
