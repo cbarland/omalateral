@@ -50,9 +50,11 @@ internal class BeastScreenshotController(
         Thread(runnable, "lateral-screenshot").apply { isDaemon = true }
     }
     private val captureInFlight = AtomicBoolean(false)
+    @Volatile private var closed = false
 
     /** Must be called from the BeastActivity main thread. */
     fun request(target: ScreenshotTarget): Boolean {
+        if (closed) return false
         if (!captureInFlight.compareAndSet(false, true)) return false
 
         when (target) {
@@ -153,15 +155,20 @@ internal class BeastScreenshotController(
     }
 
     private fun enqueueSave(target: ScreenshotTarget, bitmap: Bitmap) {
-        captureExecutor.execute {
-            val result = try {
-                saveBitmap(target, bitmap)
-            } catch (error: Exception) {
-                Result.Failed(target, error.message ?: "Could not save screenshot")
-            } finally {
-                if (!bitmap.isRecycled) bitmap.recycle()
+        try {
+            captureExecutor.execute {
+                val result = try {
+                    saveBitmap(target, bitmap)
+                } catch (error: Exception) {
+                    Result.Failed(target, error.message ?: "Could not save screenshot")
+                } finally {
+                    if (!bitmap.isRecycled) bitmap.recycle()
+                }
+                finish(result)
             }
-            finish(result)
+        } catch (_: RejectedExecutionException) {
+            if (!bitmap.isRecycled) bitmap.recycle()
+            captureInFlight.set(false)
         }
     }
 
@@ -217,10 +224,11 @@ internal class BeastScreenshotController(
 
     private fun finish(result: Result) {
         captureInFlight.set(false)
-        mainHandler.post { onResult(result) }
+        if (!closed) mainHandler.post { if (!closed) onResult(result) }
     }
 
     override fun close() {
-        captureExecutor.shutdownNow()
+        closed = true
+        captureExecutor.shutdown()
     }
 }

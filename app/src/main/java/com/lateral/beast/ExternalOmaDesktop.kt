@@ -17,12 +17,11 @@ import android.os.Looper
 import android.os.Process
 import android.os.UserHandle
 import android.os.UserManager
-import android.view.Display
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import android.view.View
+import android.view.ViewTreeObserver
 import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -134,9 +133,11 @@ internal class ExternalOmaDesktop private constructor(
                     onLaunch()
                 } else {
                     // Never convert a work-profile request into the helper's owner-profile launch.
+                    val displayId = activity.display?.displayId
+                        ?: return@post report("External display is unavailable")
                     runCatching {
                         launcher.startMainActivity(component, user, null,
-                            ActivityOptions.makeBasic().apply { launchDisplayId = activity.display!!.displayId }.toBundle())
+                            ActivityOptions.makeBasic().apply { launchDisplayId = displayId }.toBundle())
                     }.onSuccess { onLaunch() }.onFailure { report("Android refused the work-app launch: ${it.message}") }
                 }
             }
@@ -170,16 +171,18 @@ internal class ExternalOmaDesktop private constructor(
         override fun onNullBinding(name: ComponentName) { if (!closed && name.packageName == provider) nextProvider() }
     }
 
+    private val placementObserver = ViewTreeObserver.OnPreDrawListener {
+        if (!closed && remote != null && remoteDisplayId != activity.display?.displayId) {
+            view.post {
+                if (!closed && remote != null && remoteDisplayId != activity.display?.displayId) { dropRemote(); mountSurface() }
+            }
+        }
+        true
+    }
+
     init {
         view.post(::bind)
-        view.viewTreeObserver.addOnPreDrawListener {
-            if (!closed && remote != null && remoteDisplayId != activity.display?.displayId) {
-                view.post {
-                    if (!closed && remote != null && remoteDisplayId != activity.display?.displayId) { dropRemote(); mountSurface() }
-                }
-            }
-            true
-        }
+        view.viewTreeObserver.addOnPreDrawListener(placementObserver)
     }
 
     private fun bind() {
@@ -511,6 +514,7 @@ internal class ExternalOmaDesktop private constructor(
     }
     override fun close() {
         closed = true
+        if (view.viewTreeObserver.isAlive) view.viewTreeObserver.removeOnPreDrawListener(placementObserver)
         ExternalDesktopConsent.cancel(this)
         // Leave in-flight connection completions queued so they can release a
         // SurfacePackage and close a session that arrives after this activity ends.
