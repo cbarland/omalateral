@@ -12,14 +12,13 @@ internal object PhysicalDisplayCaptureTarget {
         )
         val displayHeaders = Regex("(?m)^Display \\d+ \\([^\\r\\n]*\\)[^\\r\\n]*\\r?$")
             .findAll(dump).map { it.range.first }.toList()
-        for ((headerPattern, stackPattern) in formats) {
-            val headers = headerPattern.findAll(dump).toList()
-            headers.firstOrNull { header ->
+        val matches = formats.flatMap { (headerPattern, stackPattern) ->
+            headerPattern.findAll(dump).mapNotNull { header ->
                 val end = displayHeaders.firstOrNull { it > header.range.first } ?: dump.length
                 val section = dump.substring(header.range.last + 1, end)
-                stackPattern.containsMatchIn(section)
-            }?.let { return it.groupValues[1] }
+                header.groupValues[1].takeIf { stackPattern.containsMatchIn(section) }
+            }.toList()
         }
-        return null
+        return matches.distinct().singleOrNull()
     }
 }

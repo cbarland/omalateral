@@ -17,6 +17,8 @@ the screenshot.
 
 - `:app:testStableDebugUnitTest`, `:app:assembleStableDebug`, and
   `:app:assembleStableDebugAndroidTest` pass offline.
+- Duplicate SurfaceFlinger layer-stack matches are rejected by a unit test;
+  connection retries and remote input now have bounded executor capacity.
 - On emulator-5554, the selected bridge preview fixture passes connection,
   inherited pages side by side, visible host cursor, PhoneUI-routed click and
   wheel input, search, and panel dismissal. It also rejects a fabricated
@@ -36,7 +38,9 @@ the screenshot.
 
 - Provider negotiation, session opening, pointer/actions, and shutdown now run
   off BeastActivity's UI thread, with connection and surface-opening timeouts.
-  The emulator fixture covers normal service behavior; a deliberately stalled
+  One retry can run alongside a stuck Binder call; input saturation returns to
+  the embedded desktop. Consent requests are serialized across sessions. The
+  emulator fixture covers normal service behavior; a deliberately stalled
   provider and process-death recovery still need targeted validation.
 - The fixture explicitly selects `dev.omalauncher.bridgepreview`, and the
   screenshot content assertion samples its first page. Release-provider

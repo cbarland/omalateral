@@ -46,4 +46,15 @@ class PhysicalDisplayCaptureTargetTest {
 
         assertNull(PhysicalDisplayCaptureTarget.forLayerStack(dump, 2))
     }
+
+    @Test fun ambiguousLayerStackNeverChoosesAnArbitraryOutput() {
+        val dump = """
+            Display 11529215046801423610 (virtual, "External A")
+              layerFilter={layerStack=2 toInternalDisplay=false }
+            Display 11529215047605898346 (virtual, "External B")
+              layerFilter={layerStack=2 toInternalDisplay=false }
+        """.trimIndent()
+
+        assertNull(PhysicalDisplayCaptureTarget.forLayerStack(dump, 2))
+    }
 }

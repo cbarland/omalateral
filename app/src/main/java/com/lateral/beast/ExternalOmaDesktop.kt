@@ -32,7 +32,11 @@ import dev.omalauncher.desktop.IDesktopBridge
 import dev.omalauncher.desktop.IDesktopHost
 import dev.omalauncher.desktop.IDesktopSession
 import java.util.concurrent.Executors
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.SynchronousQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 /** Live, separately consented provider surface. The embedded runtime is a lazy fallback. */
 @android.annotation.TargetApi(30)
@@ -68,12 +72,12 @@ internal class ExternalOmaDesktop private constructor(
     private val statusWorker = Executors.newSingleThreadExecutor { task ->
         Thread(task, "omalauncher-desktop-status").apply { isDaemon = true }
     }
-    private val connectionWorker = Executors.newSingleThreadExecutor { task ->
-        Thread(task, "omalauncher-desktop-connection").apply { isDaemon = true }
-    }
-    private val inputWorker = Executors.newSingleThreadExecutor { task ->
-        Thread(task, "omalauncher-desktop-input").apply { isDaemon = true }
-    }
+    // Binder timeouts cannot interrupt a stuck provider. Allow one independent retry,
+    // then reject further work instead of growing a queue behind blocked calls.
+    private val connectionWorker = ThreadPoolExecutor(0, 2, 30, TimeUnit.SECONDS,
+        SynchronousQueue(), { task -> Thread(task, "omalauncher-desktop-connection").apply { isDaemon = true } })
+    private val inputWorker = ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(128), { task -> Thread(task, "omalauncher-desktop-input").apply { isDaemon = true } })
     private val prefs = activity.getSharedPreferences("external_omalauncher", Context.MODE_PRIVATE)
     private var index = 0
     private var bound = false
@@ -408,7 +412,9 @@ internal class ExternalOmaDesktop private constructor(
                     if (!closed && remote === session) fallback("Omalauncher session ended: ${error.message}")
                 } }
             }
-        } catch (_: RejectedExecutionException) { /* The activity is closing. */ }
+        } catch (_: RejectedExecutionException) {
+            handler.post { if (!closed && remote === session) fallback("Omalauncher input stalled; using the local desktop") }
+        }
     }
 
     private fun closeSessionAsync(session: IDesktopSession) {
@@ -436,6 +442,7 @@ internal class ExternalOmaDesktop private constructor(
             }
         } catch (_: RejectedExecutionException) {
             copy.recycle()
+            handler.post { if (!closed && remote === session) fallback("Omalauncher input stalled; using the local desktop") }
             return false
         }
         return true
@@ -491,7 +498,10 @@ internal class ExternalOmaDesktop private constructor(
                     if (!closed && remote === session) fallback("Omalauncher session ended: ${error.message}")
                 } }
             }
-        } catch (_: RejectedExecutionException) { return false }
+        } catch (_: RejectedExecutionException) {
+            handler.post { if (!closed && remote === session) fallback("Omalauncher input stalled; using the local desktop") }
+            return false
+        }
         return event.keyCode != KeyEvent.KEYCODE_ESCAPE
     }
     override fun popupClick(x: Int, y: Int, button: Int) = local?.popupClick(x, y, button) ?: false

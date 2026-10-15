@@ -336,7 +336,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     @Suppress("DEPRECATION")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        com.lateral.beast.ExternalDesktopConsent.finish(requestCode, resultCode)
+        com.lateral.beast.ExternalDesktopConsent.finish(this, requestCode, resultCode)
     }
 
     override fun onNewIntent(intent: Intent) {
