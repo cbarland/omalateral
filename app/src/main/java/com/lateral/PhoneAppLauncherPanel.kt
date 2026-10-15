@@ -9,6 +9,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -58,6 +59,7 @@ object PhoneAppLauncherPanel {
         val query = EditText(activity).apply {
             hint = "find app"
             isSingleLine = true
+            imeOptions = imeOptions or EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN
             typeface = Typeface.MONOSPACE
             setTextColor(Color.WHITE)
             setHintTextColor(Color.rgb(105, 119, 119))

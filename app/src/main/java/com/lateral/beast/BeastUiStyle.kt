@@ -12,12 +12,16 @@ import com.lateral.InputSettings
 import java.util.WeakHashMap
 
 internal const val OMARCHY_WINDOW_BORDER_DP = 2
+internal fun desktopTabBackground(focused: Boolean, density: Float): Drawable = GradientDrawable().apply {
+    setColor(if (focused) InputSettings.theme.lighterBackground else Color.TRANSPARENT)
+    setStroke(density.toInt().coerceAtLeast(1), if (focused) InputSettings.accentColor else Color.TRANSPARENT)
+}
 /** Omarchy-style 2px frame: a single accent color when focused, muted gray otherwise. */
 internal fun omarchyWindowBorder(focused: Boolean, borderPx: Int): Drawable {
     val outer = if (focused) {
         ColorDrawable(InputSettings.accentColor)
     } else {
-        ColorDrawable(Color.argb(0xAA, Color.red(InputSettings.theme.muted), Color.green(InputSettings.theme.muted), Color.blue(InputSettings.theme.muted)))
+        ColorDrawable(InputSettings.theme.muted)
     }
     val inner = GradientDrawable().apply { setColor(InputSettings.theme.darkerBackground) }
     return LayerDrawable(arrayOf(outer, inner)).apply {
@@ -49,6 +53,10 @@ internal fun View.installBeastHover(
         }
         false
     }
+    if (isClickable) {
+        isFocusable = true
+        setOnFocusChangeListener { view, focused -> updateBeastHover(view, focused || view.isHovered) }
+    }
 }
 
 internal fun TextView.installBeastHover(normalColor: (() -> Int)? = null) {
@@ -70,15 +78,16 @@ internal fun View.isBeastHoverTarget(): Boolean = synchronized(hoverStates) {
 
 internal fun updateBeastHover(view: View, hovered: Boolean) {
     val state = synchronized(hoverStates) { hoverStates[view] } ?: return
-    if (!view.isEnabled || state.hovered == hovered) return
-    state.hovered = hovered
-    if (hovered) {
+    val active = view.isEnabled && (hovered || view.hasFocus())
+    if (state.hovered == active) return
+    state.hovered = active
+    if (active) {
         view.background = beastHoverBackground(view)
         state.textColors.forEach { (text, _) -> text.setTextColor(InputSettings.theme.brightForeground) }
         view.alpha = 1f
     } else {
         view.background = state.normalBackground
-        state.textColors.forEach { (text, color) -> text.setTextColor(color()) }
+        state.textColors.forEach { (text, color) -> text.setTextColor(if (state.hovered) InputSettings.theme.brightForeground else color()) }
         view.alpha = state.normalAlpha
     }
 }
@@ -92,6 +101,6 @@ internal fun refreshBeastHoverAppearance() {
     }
     states.forEach { (view, state) ->
         if (state.hovered) view.background = beastHoverBackground(view)
-        state.textColors.forEach { (text, color) -> text.setTextColor(color()) }
+        state.textColors.forEach { (text, color) -> text.setTextColor(if (state.hovered) InputSettings.theme.brightForeground else color()) }
     }
 }

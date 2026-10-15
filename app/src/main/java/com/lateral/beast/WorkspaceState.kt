@@ -35,6 +35,18 @@ data class BeastTask(
     var beastRequestUntil: Long = 0L,
     /** Trusted display assigned to a provisional launcher request before task-id binding. */
     var pendingDisplayId: Int? = null,
+    var workspace: Int = 1,
+    var floating: Boolean = false,
+    var pinned: Boolean = false,
+    var floatingX: Float = .2f,
+    var floatingY: Float = .15f,
+    var floatingWidth: Float = .6f,
+    var floatingHeight: Float = .7f,
+    var splitAnchor: Long? = null,
+    var group: Long? = null,
+    var maximized: Boolean = false,
+    var pseudo: Boolean = false,
+    var columnScale: Float = 1f,
 ) {
     var minimized: Boolean
         get() = placement != TaskPlacement.BEAST_VISIBLE
@@ -60,6 +72,212 @@ object WorkspaceState {
     private var revealFocusedTaskRequested = false
     private var prefs: android.content.SharedPreferences? = null
     private var restored = emptyMap<Int, Persisted>()
+    private val workspaceLayouts = mutableMapOf<Int, WorkspaceLayout>()
+    private val dwindleLayouts = mutableMapOf<Int, DwindleLayout>()
+    private val workspaceFocus = mutableMapOf<Int, Long?>()
+    var activeWorkspace = 1
+        private set
+    var previousWorkspace = 1
+        private set
+    var scratchpadVisible = false
+        private set
+
+    fun belongsToActiveWorkspace(task: BeastTask): Boolean = task.pinned || task.workspace == activeWorkspace ||
+        (task.workspace == 0 && scratchpadVisible)
+
+    fun visibleTasks(): List<BeastTask> {
+        val candidates = tasks.filter { belongsToActiveWorkspace(it) &&
+            (it.placement == TaskPlacement.BEAST_VISIBLE || it.placement == TaskPlacement.PENDING_BEAST) }
+        val selected = candidates.filter { it.group != null }.groupBy { it.group }.mapValues { (_, members) ->
+            members.firstOrNull { it.id == focusedTaskId } ?: members.maxBy { it.lastInteractionSequence }
+        }
+        return candidates.filter { it.group == null || selected[it.group]?.id == it.id }
+    }
+
+    fun layout(workspace: Int = activeWorkspace) = workspaceLayouts[workspace] ?: WorkspaceLayout.SCROLLING
+
+    private fun dwindle() = dwindleLayouts.getOrPut(activeWorkspace) { DwindleLayout(prefs?.getString("dwindle_$activeWorkspace", null)) }
+
+    internal fun windowBounds(width: Int, height: Int, outer: Int, gap: Int): Map<Long, WindowBounds> {
+        val visible = visibleTasks()
+        val tiled = visible.filter { !it.floating && !it.pinned && it.workspace != 0 }
+        val result = if (layout() == WorkspaceLayout.DWINDLE) {
+            dwindle().sync(tiled.map { it.group ?: it.id }, tasks.firstOrNull { it.id == focusedTaskId }?.let { it.group ?: it.id },
+                width, height, tiled.associate { (it.group ?: it.id) to it.splitAnchor })
+            val cells = dwindle().bounds(width, height, outer, gap)
+            tiled.mapNotNull { task -> cells[task.group ?: task.id]?.let { task.id to it } }.toMap().toMutableMap()
+        } else {
+            val column = ((width - 2 * outer) * .49f).toInt().coerceAtLeast(1)
+            var x = outer
+            val availableHeight = (height - 2 * outer).coerceAtLeast(1)
+            tiled.associate { task ->
+                val preferredWidth = if (task.mode == PresentationMode.PHONE) minOf(column, (availableHeight * 9f / 16f).toInt().coerceAtLeast(1)) else column
+                val tileWidth = (preferredWidth * task.columnScale).toInt().coerceIn(1, (width - 2 * outer).coerceAtLeast(1))
+                val box = WindowBounds(x, outer, tileWidth, availableHeight)
+                x += tileWidth + gap
+                task.id to box
+            }.toMutableMap()
+        }
+        visible.filter { it.floating || it.pinned || it.workspace == 0 }.forEach { task ->
+            val w = (width * task.floatingWidth).toInt().coerceIn(1, width.coerceAtLeast(1))
+            val h = (height * task.floatingHeight).toInt().coerceIn(1, height.coerceAtLeast(1))
+            result[task.id] = WindowBounds((width * task.floatingX).toInt().coerceIn(0, (width - w).coerceAtLeast(0)),
+                (height * task.floatingY).toInt().coerceIn(0, (height - h).coerceAtLeast(0)), w, h)
+        }
+        visible.forEach { task ->
+            val box = result[task.id] ?: return@forEach
+            if (task.maximized) result[task.id] = WindowBounds(0, 0, width.coerceAtLeast(1), height.coerceAtLeast(1))
+            else if (task.pseudo && !task.floating) {
+                val w = minOf(box.width, (width * task.floatingWidth).toInt().coerceAtLeast(1))
+                val h = minOf(box.height, (height * task.floatingHeight).toInt().coerceAtLeast(1))
+                result[task.id] = WindowBounds(box.x + (box.width - w) / 2, box.y + (box.height - h) / 2, w, h)
+            }
+        }
+        return result
+    }
+
+    fun switchWorkspace(workspace: Int) {
+        require(workspace in 1..10)
+        if (workspace == activeWorkspace) return
+        workspaceFocus[activeWorkspace] = focusedTaskId
+        previousWorkspace = activeWorkspace
+        activeWorkspace = workspace
+        scratchpadVisible = false
+        focusedTaskId = workspaceFocus[workspace]?.takeIf { id -> visibleTasks().any { it.id == id } }
+            ?: visibleTasks().lastOrNull()?.id
+        viewportPosition = 0f
+        revealFocusedTaskRequested = true
+        notifyChanged()
+    }
+
+    fun moveToWorkspace(id: Long, workspace: Int, follow: Boolean = true) {
+        require(workspace in 0..10)
+        val task = mutableTasks.firstOrNull { it.id == id } ?: return
+        val members = if (task.group == null) listOf(task) else tasks.filter { it.group == task.group }
+        members.forEach { it.workspace = workspace; it.pinned = false; if (workspace == 0) it.floating = true }
+        if (follow && workspace != 0) switchWorkspace(workspace)
+        focusedTaskId = if (follow && workspace != 0) id else visibleTasks().lastOrNull()?.id
+        notifyChanged()
+    }
+
+    fun toggleLayout() {
+        workspaceLayouts[activeWorkspace] = if (layout() == WorkspaceLayout.DWINDLE) WorkspaceLayout.SCROLLING else WorkspaceLayout.DWINDLE
+        viewportPosition = 0f
+        notifyChanged()
+    }
+
+    fun toggleFloating(id: Long, pin: Boolean = false) {
+        val task = mutableTasks.firstOrNull { it.id == id } ?: return
+        val members = if (task.group == null) listOf(task) else tasks.filter { it.group == task.group }
+        val next = !task.floating; val pinned = !task.pinned
+        members.forEach {
+            it.maximized = false
+            if (pin) { it.pinned = pinned; it.floating = true }
+            else { it.floating = next; it.pinned = false }
+        }
+        notifyChanged()
+    }
+
+    fun toggleScratchpad() {
+        scratchpadVisible = !scratchpadVisible
+        if (scratchpadVisible) focusedTaskId = visibleTasks().lastOrNull { it.workspace == 0 }?.id ?: focusedTaskId
+        else if (tasks.firstOrNull { it.id == focusedTaskId }?.workspace == 0) focusedTaskId = visibleTasks().lastOrNull()?.id
+        notifyChanged()
+    }
+
+    internal fun focusDirectional(direction: WindowDirection, bounds: Map<Long, WindowBounds>, swap: Boolean = false): Boolean {
+        val target = directionalWindow(bounds, focusedTaskId, direction) ?: return false
+        val current = focusedTaskId
+        if (swap && current != null) {
+            if (layout() == WorkspaceLayout.DWINDLE) dwindle().swap(tasks.first { it.id == current }.let { it.group ?: it.id }, tasks.first { it.id == target }.let { it.group ?: it.id })
+            val from = mutableTasks.indexOfFirst { it.id == current }; val to = mutableTasks.indexOfFirst { it.id == target }
+            if (from >= 0 && to >= 0) { val item = mutableTasks[from]; mutableTasks[from] = mutableTasks[to]; mutableTasks[to] = item }
+            notifyChanged()
+        } else focus(target, reveal = true)
+        return true
+    }
+
+    fun toggleSplit() { tasks.firstOrNull { it.id == focusedTaskId }?.let { dwindle().toggleSplit(it.group ?: it.id); notifyChanged() } }
+
+    fun resizeFocused(horizontal: Boolean, delta: Float, persist: Boolean = true) {
+        val task = mutableTasks.firstOrNull { it.id == focusedTaskId } ?: return
+        if (task.floating) {
+            floatingBounds(task.id, task.floatingX, task.floatingY,
+                if (horizontal) task.floatingWidth + delta else task.floatingWidth,
+                if (horizontal) task.floatingHeight else task.floatingHeight, persist)
+            return
+        } else if (layout() == WorkspaceLayout.SCROLLING) {
+            if (horizontal) {
+                val members = if (task.group == null) listOf(task) else tasks.filter { it.group == task.group }
+                val next = (task.columnScale + delta * 2f).coerceIn(.5f, 2f)
+                members.forEach { it.columnScale = next }
+            }
+        } else dwindle().resize(task.group ?: task.id, horizontal, delta)
+        notifyChanged(persist)
+    }
+
+    fun moveFloating(id: Long, dx: Float, dy: Float) {
+        val task = mutableTasks.firstOrNull { it.id == id } ?: return
+        floatingBounds(id, task.floatingX + dx, task.floatingY + dy, task.floatingWidth, task.floatingHeight)
+    }
+
+    fun floatingBounds(id: Long, x: Float, y: Float, width: Float, height: Float, persist: Boolean = true) {
+        val task = mutableTasks.firstOrNull { it.id == id } ?: return
+        val members = if (task.group == null) listOf(task) else tasks.filter { it.group == task.group }
+        members.forEach {
+            it.floating = true; it.maximized = false
+            it.floatingWidth = width.coerceIn(.15f, 1f); it.floatingHeight = height.coerceIn(.15f, 1f)
+            it.floatingX = x.coerceIn(0f, 1f - it.floatingWidth); it.floatingY = y.coerceIn(0f, 1f - it.floatingHeight)
+        }
+        notifyChanged(persist)
+    }
+
+    internal fun savedTileLayout(): String? = if (layout() == WorkspaceLayout.DWINDLE) dwindle().save() else null
+
+    internal fun finishTileDrag(id: Long, target: Long?, saved: String?) {
+        val task = tasks.firstOrNull { it.id == id } ?: return
+        (if (task.group == null) listOf(task) else tasks.filter { it.group == task.group }).forEach { it.floating = false }
+        if (saved != null) dwindleLayouts[activeWorkspace] = DwindleLayout(saved)
+        val other = tasks.firstOrNull { it.id == target && it.id != id }
+        if (other != null) {
+            if (layout() == WorkspaceLayout.DWINDLE) dwindle().swap(task.group ?: task.id, other.group ?: other.id)
+            else {
+                val from = mutableTasks.indexOf(task); val to = mutableTasks.indexOf(other)
+                mutableTasks[from] = other; mutableTasks[to] = task
+            }
+        }
+        notifyChanged()
+    }
+
+    fun toggleMaximized(id: Long) { tasks.firstOrNull { it.id == id }?.let { it.maximized = !it.maximized; notifyChanged() } }
+    fun togglePseudo(id: Long) { tasks.firstOrNull { it.id == id }?.let { it.pseudo = !it.pseudo; notifyChanged() } }
+
+    fun toggleGroup(id: Long, detach: Boolean = false) {
+        val task = tasks.firstOrNull { it.id == id } ?: return
+        val group = task.group
+        if (group == null && !detach) task.group = task.id
+        else if (detach) task.group = null
+        else tasks.filter { it.group == group }.forEach { it.group = null }
+        notifyChanged()
+    }
+
+    fun focusGroup(delta: Int, index: Int? = null) {
+        val current = tasks.firstOrNull { it.id == focusedTaskId } ?: return
+        val members = tasks.filter { it.group != null && it.group == current.group }
+        if (members.isEmpty()) return
+        val target = index?.minus(1)?.takeIf { it in members.indices }
+            ?: ((members.indexOfFirst { it.id == current.id } + delta + members.size) % members.size)
+        focus(members[target].id, reveal = true)
+    }
+
+    internal fun joinDirectionalGroup(direction: WindowDirection, bounds: Map<Long, WindowBounds>) {
+        val current = tasks.firstOrNull { it.id == focusedTaskId } ?: return
+        val target = directionalWindow(bounds, current.id, direction)?.let { id -> tasks.firstOrNull { it.id == id } } ?: return
+        val group = target.group ?: target.id
+        target.group = group; current.group = group
+        current.floating = target.floating; current.workspace = target.workspace
+        notifyChanged()
+    }
 
     var onImmediateSyncRequested: (() -> Unit)? = null
 
@@ -73,6 +291,11 @@ object WorkspaceState {
         if (prefs != null) return
         prefs = context.getSharedPreferences("workspace_tasks", Context.MODE_PRIVATE)
         restored = readPersisted()
+        activeWorkspace = prefs?.getInt("active_workspace", 1)?.coerceIn(1, 10) ?: 1
+        for (workspace in 1..10) workspaceLayouts[workspace] = runCatching {
+            WorkspaceLayout.valueOf(prefs?.getString("layout_$workspace", "SCROLLING") ?: "SCROLLING")
+        }.getOrDefault(WorkspaceLayout.SCROLLING)
+        pendingIds.set(minOf(-1L, (restored.values.flatMap { listOfNotNull(it.desktopId, it.group) }.minOrNull() ?: 0L) - 1L))
     }
 
     fun addListener(listener: () -> Unit) { listeners += listener }
@@ -162,7 +385,7 @@ object WorkspaceState {
                     }
                     val fallbackLabel = snapshot.packageName.substringAfterLast('.')
                     task = BeastTask(
-                        id = snapshot.taskId.toLong(),
+                        id = saved?.desktopId ?: snapshot.taskId.toLong(),
                         packageName = snapshot.packageName,
                         activityName = snapshot.activityName,
                         label = fallbackLabel,
@@ -173,6 +396,13 @@ object WorkspaceState {
                         fullscreenReturnMode = saved?.fullscreenReturnMode,
                         placement = placement,
                         lastInteractionSequence = nextInteractionSequence(),
+                        workspace = saved?.workspace ?: activeWorkspace,
+                        floating = saved?.floating ?: false,
+                        pinned = saved?.pinned ?: false,
+                        floatingX = saved?.x ?: .2f, floatingY = saved?.y ?: .15f,
+                        floatingWidth = saved?.width ?: .6f, floatingHeight = saved?.height ?: .7f,
+                        columnScale = saved?.columnScale ?: 1f,
+                        group = saved?.group, maximized = saved?.maximized ?: false, pseudo = saved?.pseudo ?: false,
                     )
                     val restoredOrder = saved?.beastOrder
                     if (restoredOrder == null) {
@@ -225,7 +455,7 @@ object WorkspaceState {
             }
 
         if (focusedTaskId == null) {
-            focusedTaskId = mutableTasks.firstOrNull { it.placement == TaskPlacement.BEAST_VISIBLE }?.id
+            focusedTaskId = visibleTasks().firstOrNull()?.id
         }
         if (changed) notifyChanged()
     }
@@ -244,6 +474,10 @@ object WorkspaceState {
             activityName = activityName, label = label, shortLabel = shortLabel(label),
             placement = TaskPlacement.PENDING_BEAST,
             lastInteractionSequence = nextInteractionSequence(),
+            workspace = activeWorkspace,
+            mode = PresentationMode.TABLET,
+            splitAnchor = focusedTaskId,
+            group = tasks.firstOrNull { it.id == focusedTaskId }?.group,
         )
         // Beast order is intentionally independent of Android Overview. New instances
         // append without disturbing the user's existing spatial layout.
@@ -270,13 +504,15 @@ object WorkspaceState {
         val task = mutableTasks.firstOrNull { it.id == id } ?: return
         if (task.placement != TaskPlacement.PENDING_BEAST) return
         task.beastRequestUntil = SystemClock.uptimeMillis() + BEAST_MOVE_GRACE_MS
-        focusedTaskId = id
+        if (focusedTaskId == null && belongsToActiveWorkspace(task)) focusedTaskId = id
         notifyChanged()
         onImmediateSyncRequested?.invoke()
     }
 
     fun focus(id: Long, reveal: Boolean = false) {
         val task = mutableTasks.firstOrNull { it.id == id } ?: return
+        if (task.workspace in 1..10 && !task.pinned && task.workspace != activeWorkspace) switchWorkspace(task.workspace)
+        if (task.workspace == 0) scratchpadVisible = true
         if (!task.supportsMultiWindow) {
             task.closeError = "This app cannot move to a secondary display"
             notifyChanged()
@@ -296,9 +532,9 @@ object WorkspaceState {
     fun focusRelative(delta: Int): Boolean {
         if (delta == 0) return false
         val visibleIds = mutableTasks.asSequence()
-            .filter {
+            .filter { belongsToActiveWorkspace(it) && (
                 it.placement == TaskPlacement.BEAST_VISIBLE ||
-                    it.placement == TaskPlacement.PENDING_BEAST
+                    it.placement == TaskPlacement.PENDING_BEAST)
             }
             .map(BeastTask::id)
             .toList()
@@ -345,7 +581,7 @@ object WorkspaceState {
         if (index < 0) return null
         val removed = mutableTasks.removeAt(index)
         if (focusedTaskId == id) {
-            focusedTaskId = mutableTasks.firstOrNull { it.placement == TaskPlacement.BEAST_VISIBLE }?.id
+            focusedTaskId = visibleTasks().firstOrNull()?.id
         }
         notifyChanged()
         return removed
@@ -363,9 +599,7 @@ object WorkspaceState {
         if (task.placement != TaskPlacement.BEAST_VISIBLE) return
         task.placement = TaskPlacement.BEAST_MINIMIZED
         if (focusedTaskId == id) {
-            focusedTaskId = mutableTasks.firstOrNull {
-                it.placement == TaskPlacement.BEAST_VISIBLE
-            }?.id
+            focusedTaskId = visibleTasks().firstOrNull()?.id
         }
         notifyChanged()
     }
@@ -402,8 +636,10 @@ object WorkspaceState {
 
     fun closeAllCandidates(): List<BeastTask> = mutableTasks.toList()
 
-    private fun notifyChanged() {
-        persist()
+    fun commitGeometry() = persist()
+
+    private fun notifyChanged(persist: Boolean = true) {
+        if (persist) persist()
         listeners.forEach { it() }
     }
 
@@ -417,6 +653,13 @@ object WorkspaceState {
         val mode: PresentationMode,
         val fullscreenReturnMode: PresentationMode?,
         val beastOrder: Int,
+        val desktopId: Long,
+        val workspace: Int,
+        val floating: Boolean,
+        val pinned: Boolean,
+        val x: Float, val y: Float, val width: Float, val height: Float,
+        val group: Long?, val maximized: Boolean, val pseudo: Boolean,
+        val columnScale: Float,
     )
 
     private fun readPersisted(): Map<Int, Persisted> = runCatching {
@@ -432,6 +675,15 @@ object WorkspaceState {
                         .takeIf(String::isNotBlank)
                         ?.let(PresentationMode::valueOf),
                     item.optInt("beastOrder", index),
+                    item.optLong("desktopId", item.getInt("taskId").toLong()),
+                    item.optInt("workspace", 1).coerceIn(0, 10),
+                    item.optBoolean("floating", false), item.optBoolean("pinned", false),
+                    item.optDouble("x", .2).toFloat(), item.optDouble("y", .15).toFloat(),
+                    item.optDouble("width", .6).toFloat().coerceIn(.15f, 1f),
+                    item.optDouble("height", .7).toFloat().coerceIn(.15f, 1f),
+                    if (item.has("group")) item.getLong("group") else null,
+                    item.optBoolean("maximized", false), item.optBoolean("pseudo", false),
+                    item.optDouble("columnScale", 1.0).toFloat().coerceIn(.5f, 2f),
                 ))
             }
         }
@@ -448,9 +700,19 @@ object WorkspaceState {
                 put("mode", task.mode.name)
                 task.fullscreenReturnMode?.let { put("fullscreenReturnMode", it.name) }
                 put("beastOrder", order)
+                put("desktopId", task.id); put("workspace", task.workspace)
+                put("floating", task.floating); put("pinned", task.pinned)
+                put("x", task.floatingX); put("y", task.floatingY)
+                put("width", task.floatingWidth); put("height", task.floatingHeight)
+                put("columnScale", task.columnScale)
+                task.group?.let { put("group", it) }; put("maximized", task.maximized); put("pseudo", task.pseudo)
             })
         }
-        prefs?.edit()?.putString(KEY_STATE, array.toString())?.apply()
+        prefs?.edit()?.putString(KEY_STATE, array.toString())?.putInt("active_workspace", activeWorkspace)?.apply()
+        prefs?.edit()?.apply {
+            workspaceLayouts.forEach { (workspace, layout) -> putString("layout_$workspace", layout.name) }
+            dwindleLayouts.forEach { (workspace, tree) -> putString("dwindle_$workspace", tree.save()) }
+        }?.apply()
     }
 
     private const val KEY_STATE = "state.v2"

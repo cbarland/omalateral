@@ -34,6 +34,7 @@ object InputSettings {
     private const val KEY_TOOLBAR_ALIGNMENT = "toolbar_alignment"
     private const val KEY_TASKBAR_ALIGNMENT = "taskbar_alignment"
     private const val KEY_THEME = "omarchy_theme"
+    private const val KEY_THEME_PALETTE = "omarchy_theme_palette"
 
     @Volatile var cursorSensitivity = 1.4f
         private set
@@ -133,7 +134,14 @@ object InputSettings {
         taskbarAlignment = prefs.getString(KEY_TASKBAR_ALIGNMENT, BarAlignment.LEFT.name)
             ?.let { runCatching { BarAlignment.valueOf(it) }.getOrNull() }
             ?: BarAlignment.LEFT
-        theme = OmarchyThemes.byId(prefs.getString(KEY_THEME, OmarchyThemes.DEFAULT_ID).orEmpty())
+        val selectedTheme = prefs.getString(KEY_THEME, OmarchyThemes.DEFAULT_ID).orEmpty()
+        val savedPalette = runCatching {
+            val json = org.json.JSONObject(prefs.getString(KEY_THEME_PALETTE, null) ?: return@runCatching null)
+            if (json.optString("id") != selectedTheme) return@runCatching null
+            OmarchyTheme.fromPalette(selectedTheme, json.optString("name", selectedTheme),
+                json.keys().asSequence().associateWith { json.optString(it) })
+        }.getOrNull()
+        theme = savedPalette ?: OmarchyThemes.byId(selectedTheme)
         accentColor = theme.accent
     }
 
@@ -239,10 +247,12 @@ object InputSettings {
     )
 
     fun setTheme(context: Context, next: OmarchyTheme) {
+        if (theme == next) return
         theme = next
         accentColor = next.accent
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(KEY_THEME, next.id)
+            .putString(KEY_THEME_PALETTE, org.json.JSONObject(next.palette()).put("id", next.id).put("name", next.name).toString())
             .apply()
         appearanceListeners.forEach { it() }
     }

@@ -7,7 +7,7 @@ internal fun decoratorGeometryScale(uiScale: Float, availableWidthPx: Int, densi
     val desired = uiScale.coerceIn(.85f, 1.15f)
     if (availableWidthPx <= 0 || !density.isFinite() || density <= 0f) return desired
     // Reserve equal space for the larger side so the middle controls stay centered, plus
-    // enough room between the navigation arrows for a useful (ellipsized) app title.
-    val centeredMinimumDp = 2 * 126 + 60 + 64 + 12
+    // enough room for a useful title; move actions now live in the window menu.
+    val centeredMinimumDp = 2 * 130 + 64 + 8
     return min(desired, availableWidthPx / (centeredMinimumDp * density)).coerceAtLeast(.1f)
 }

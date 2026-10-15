@@ -76,7 +76,7 @@ object KeyboardShortcuts {
     enum class Validation { OK, NO_MODIFIER, MODIFIER_ONLY, SYSTEM_RESERVED, DUPLICATE }
 
     val reservedLabels = listOf(
-        "All Meta / Command shortcuts",
+        "Super / Command shortcuts are handled by the Omarchy shell",
         "Alt+Tab, Alt+Space, Alt+Left, Alt+Right",
         "Ctrl+Space, Ctrl+, and Ctrl+Alt+Z",
         "Unmodified keys and Android Home, Back, volume, power, and app-switch keys",

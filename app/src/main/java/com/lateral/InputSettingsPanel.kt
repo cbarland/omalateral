@@ -154,11 +154,6 @@ object InputSettingsPanel {
                         })
                 }
             }
-        val toolbarAlignment = alignmentControl(
-            "Toolbar alignment",
-            { InputSettings.toolbarAlignment },
-            { InputSettings.setToolbarAlignment(context, it) },
-        )
         val taskbarAlignment = alignmentControl(
             "Taskbar alignment",
             { InputSettings.taskbarAlignment },
@@ -263,6 +258,16 @@ object InputSettingsPanel {
             }
         }
         refreshThemeWidgets()
+        panel.addView(Switch(context).apply {
+            text = "Auto-start Omalateral desktop"
+            isChecked = DesktopShellSettings.autoStart(context)
+            setOnCheckedChangeListener { _, checked -> DesktopShellSettings.setAutoStart(context, checked) }
+        })
+        panel.addView(TextView(context).apply {
+            text = "Turn this off to leave display startup to Android's desktop mode. Return Home on the monitor or reconnect it after changing this setting."
+            setTextColor(InputSettings.theme.foreground)
+            setPadding(0, dp(4), 0, dp(12))
+        })
         panel.addView(sensitivityLabel)
         panel.addView(sensitivity)
         panel.addView(scrollSensitivity)
@@ -272,7 +277,6 @@ object InputSettingsPanel {
         panel.addView(momentum)
         panel.addView(startMinimized)
         panel.addView(showPhoneTaskbar)
-        panel.addView(toolbarAlignment)
         panel.addView(taskbarAlignment)
         panel.addView(personalizationTitle)
         panel.addView(themeValueLabel)

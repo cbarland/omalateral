@@ -36,6 +36,31 @@ data class OmarchyTheme(
     val danger: Int get() = color(redHex)
 
     private fun color(hex: String): Int = Color.parseColor(hex)
+
+    /** Semantic colors, also used to persist installed community themes from Omalauncher. */
+    fun palette(): Map<String, String> = mapOf(
+        "mode" to mode.name.lowercase(), "accent" to accentHex, "selection" to selectionHex,
+        "muted" to mutedHex, "background" to backgroundHex, "dark_background" to darkBackgroundHex,
+        "darker_background" to darkerBackgroundHex, "lighter_background" to lighterBackgroundHex,
+        "foreground" to foregroundHex, "dark_foreground" to darkForegroundHex,
+        "light_foreground" to lightForegroundHex, "bright_foreground" to brightForegroundHex, "red" to redHex,
+    )
+
+    companion object {
+        fun fromPalette(id: String, name: String, colors: Map<String, String>): OmarchyTheme? {
+            val hex = Regex("#[0-9a-fA-F]{6}")
+            fun valid(key: String) = colors[key]?.takeIf(hex::matches)?.uppercase(java.util.Locale.ROOT)
+            val background = valid("background") ?: return null
+            val foreground = valid("foreground") ?: return null
+            val surface = valid("lighter_background") ?: background
+            val border = valid("muted") ?: surface
+            return OmarchyTheme(id, name, if (colors["mode"] == "light") OmarchyThemeMode.LIGHT else OmarchyThemeMode.DARK,
+                valid("accent") ?: foreground, valid("selection") ?: surface, border, background,
+                valid("dark_background") ?: background, valid("darker_background") ?: background, surface,
+                foreground, valid("dark_foreground") ?: foreground, valid("light_foreground") ?: foreground,
+                valid("bright_foreground") ?: foreground, valid("red") ?: foreground)
+        }
+    }
 }
 
 /** Official built-in Omarchy themes, kept in the same semantic palette shape as colors.toml. */

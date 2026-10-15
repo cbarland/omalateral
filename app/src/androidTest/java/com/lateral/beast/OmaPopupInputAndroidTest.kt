@@ -79,6 +79,8 @@ class OmaPopupInputAndroidTest {
         val context = instrumentation.targetContext
         val display = checkNotNull(BeastActivity.findExternalDisplay(context))
         val previousBackend = PrivilegedService.selectedBackend
+        val previousAutoStart = com.lateral.DesktopShellSettings.autoStart(context)
+        com.lateral.DesktopShellSettings.setAutoStart(context, false)
         PrivilegedService.selectBackend(PrivilegeBackendId.SHIZUKU)
         var phone: MainActivity? = null
         var external: BeastActivity? = null
@@ -89,7 +91,8 @@ class OmaPopupInputAndroidTest {
                     .filterIsInstance<MainActivity>().firstOrNull()
                 phone != null
             }
-            onMain { BeastWorkspaceController.ensure(checkNotNull(phone), display) }
+            onMain { context.startActivity(Intent(context, BeastActivity::class.java).putExtra("embeddedDesktop", true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), android.app.ActivityOptions.makeBasic().apply { launchDisplayId = display.displayId }.toBundle()) }
             await("External desktop ready") {
                 external = listOf(Stage.RESUMED, Stage.STARTED, Stage.PAUSED).flatMap {
                     ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(it)
@@ -143,6 +146,31 @@ class OmaPopupInputAndroidTest {
                             ViewCompat.getRootWindowInsets(it)?.isVisible(WindowInsetsCompat.Type.ime()) == true
                     }
             }
+            // Verify automatic IME activation, then give the phone's close control
+            // focus. Hiding Gboard alone leaves its connection active, allowing its
+            // finishComposingText to race the independent synthetic connection.
+            onMain {
+                val proxy = WindowInspector.getGlobalWindowViews().flatMap(::views)
+                    .filterIsInstance<DesktopInputProxyView>().first { it.isShown }
+                context.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                    .hideSoftInputFromWindow(proxy.windowToken, 0)
+            }
+            await("Synthetic input has exclusive composition ownership") {
+                WindowInspector.getGlobalWindowViews().flatMap(::views)
+                    .filterIsInstance<DesktopInputProxyView>().any {
+                        it.isShown && ViewCompat.getRootWindowInsets(it)?.isVisible(WindowInsetsCompat.Type.ime()) == false
+                    }
+            }
+            onMain {
+                val close = field<View>(checkNotNull(phone), "phoneProxyClose")
+                close.isFocusableInTouchMode = true
+                assertTrue(close.requestFocus())
+            }
+            await("Gboard releases the phone editor before synthetic input") {
+                val manager = context.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                WindowInspector.getGlobalWindowViews().flatMap(::views)
+                    .filterIsInstance<DesktopInputProxyView>().any { it.isShown && !manager.isActive(it) }
+            }
             onMain {
                 val proxy = WindowInspector.getGlobalWindowViews().flatMap(::views)
                     .filterIsInstance<DesktopInputProxyView>().first { it.isShown }
@@ -194,6 +222,7 @@ class OmaPopupInputAndroidTest {
                 phone?.finish()
                 external?.finish()
                 PrivilegedService.selectBackend(previousBackend)
+                com.lateral.DesktopShellSettings.setAutoStart(context, previousAutoStart)
             }
         }
     }

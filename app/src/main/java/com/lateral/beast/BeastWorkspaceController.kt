@@ -21,13 +21,15 @@ object BeastWorkspaceController {
         if (!liveCleanupDone.compareAndSet(false, true)) return
         val tasks = taskRecords(activity)
         val currentTaskId = activity.taskId
+        val beastSurvivorId = tasks.filter { isBeastTask(it.info) }
+            .maxByOrNull { it.info.taskId }?.info?.taskId
 
         tasks.forEach { record ->
             val info = record.info
             val remove = when {
                 info.taskId == currentTaskId -> false
+                isBeastTask(info) -> info.taskId != beastSurvivorId
                 isMainRoot(info.baseActivity) -> true
-                isBeastTask(info) -> true
                 else -> false
             }
             if (remove) runCatching { record.appTask.finishAndRemoveTask() }
@@ -54,6 +56,7 @@ object BeastWorkspaceController {
         display: Display,
         action: String = BeastActivity.ACTION_ENSURE_WORKSPACE,
     ): Boolean {
+        if (!com.lateral.DesktopShellSettings.autoStart(activity)) return false
         if (PhoneView.exiting) return false
         val beastTasks = taskRecords(activity).filter { isBeastTask(it.info) }
         val survivor = beastTasks.maxByOrNull { it.info.taskId }

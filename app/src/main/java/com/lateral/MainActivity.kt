@@ -130,7 +130,15 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
                 if (DesktopTextInputSession.active) {
                     desktopInputProxy.requestFocus()
                     (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(desktopInputProxy)
-                    focusBeastSearchField()
+                    // A dialog on the external display owns global focus. Front the
+                    // phone's existing task before asking its IME to serve this editor.
+                    startActivity(Intent(this, MainActivity::class.java).apply {
+                        action = ACTION_BEAST_LAUNCHER_SEARCH
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    }, ActivityOptions.makeBasic().apply {
+                        launchDisplayId = Display.DEFAULT_DISPLAY
+                    }.toBundle())
+                    showBeastLauncherSearchOnPhone()
                 }
             }
         }
@@ -345,6 +353,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (com.lateral.beast.OmarchyShortcuts.dispatch(event)) return true
         val dismissal = event.keyCode == KeyEvent.KEYCODE_ESCAPE || event.keyCode == KeyEvent.KEYCODE_BACK
         if (dismissal && (LauncherSearchSession.active || DesktopTextInputSession.active || launcherDismissKey == event.keyCode)) {
             if (event.action == KeyEvent.ACTION_DOWN) launcherDismissKey = event.keyCode
@@ -477,6 +486,14 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         }
 
         val display = externalDisplay
+
+        if (!DesktopShellSettings.autoStart(this)) {
+            connectionText.text = if (display == null) "system: no display" else "system: external display"
+            trackpad.cancelActiveGesture()
+            trackpad.isEnabled = false
+            inputController.setDisplay(null)
+            return
+        }
 
         if (display == null) {
             connectionText.text = "beast:none"
@@ -891,6 +908,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         val entries = arrayOf(
             "Open Android settings on Beast",
             "Privileged helper",
+            "Advanced window controls",
         )
         try {
             // A touch starts while the controller is unfocusable. Clearing its flag after
@@ -908,6 +926,10 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
                     when (which) {
                         0 -> launchSettings()
                         1 -> showPrivilegeBackendPanel()
+                        2 -> {
+                            val windowLease = acquirePhoneWindowFocus()
+                            PhoneWindowsPanel.show(this) { windowLease.release() }
+                        }
                     }
                 }
                 .create()
@@ -1361,6 +1383,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         preservePhoneUi: Boolean = true,
         workspaceAction: String = BeastActivity.ACTION_ENSURE_WORKSPACE,
     ) {
+        if (!DesktopShellSettings.autoStart(this)) return
         val display = externalDisplay ?: run {
             Toast.makeText(this, "Connect an external display to open apps", Toast.LENGTH_SHORT).show()
             return

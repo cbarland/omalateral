@@ -33,11 +33,14 @@ class BeastLauncherDismissAndroidTest {
     private val context get() = instrumentation.targetContext
 
     @Test fun phoneRoutedClicksKeysAndRepeatedOpensDismissWithoutClickThrough() {
-        val display = checkNotNull(context.getSystemService(DisplayManager::class.java).displays.firstOrNull {
-            it.displayId != 0 && it.name == "Emulator 2D Display"
-        }) { "Create a secondary emulator display before running this regression" }
+        val display = checkNotNull(BeastActivity.findExternalDisplay(context)) {
+            "Create a secondary emulator display before running this regression"
+        }
         lateinit var phone: MainActivity
         lateinit var beast: BeastActivity
+        val previousBackend = PrivilegedService.selectedBackend
+        val previousAutoStart = com.lateral.DesktopShellSettings.autoStart(context)
+        com.lateral.DesktopShellSettings.setAutoStart(context, false)
         PrivilegedService.selectBackend(PrivilegeBackendId.SHIZUKU)
         instrumentation.runOnMainSync {
             context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -47,7 +50,8 @@ class BeastLauncherDismissAndroidTest {
                 .getActivitiesInStage(Stage.RESUMED).filterIsInstance<MainActivity>().firstOrNull()
             if (activity != null) { phone = activity; true } else false
         }
-        instrumentation.runOnMainSync { BeastWorkspaceController.ensure(phone, display) }
+        instrumentation.runOnMainSync { context.startActivity(Intent(context, BeastActivity::class.java).putExtra("embeddedDesktop", true)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), android.app.ActivityOptions.makeBasic().apply { launchDisplayId = display.displayId }.toBundle()) }
         await("both activities created") {
             val activities = listOf(Stage.RESUMED, Stage.STARTED, Stage.PAUSED).flatMap {
                 ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(it)
@@ -63,6 +67,16 @@ class BeastLauncherDismissAndroidTest {
             } else false
         }
         try {
+            await("Embedded desktop ready") {
+                (context.applicationContext as dev.omalauncher.RuntimeOwner).runtime.widgets.specs.count { it.program != null } >= 3
+            }
+            Thread.sleep(700)
+            instrumentation.runOnMainSync {
+                // This test intentionally has no helper. Its setup prompt must not
+                // steal PhoneUI's focus from the launcher search proxy under test.
+                field<android.app.AlertDialog?>(phone, "privilegeBackendDialog")
+                    ?.getButton(android.app.AlertDialog.BUTTON_NEGATIVE)?.performClick()
+            }
             fun launcher() = field<View>(beast, "launcher")
             fun open() {
                 instrumentation.runOnMainSync { invoke(beast, "showLauncher") }
@@ -80,13 +94,16 @@ class BeastLauncherDismissAndroidTest {
             fun closePoint(): Pair<Int, Int> {
                 var point = 0 to 0
                 // The embedded home stays mounted; a toolbar click dismisses its modal panel.
-                instrumentation.runOnMainSync { point = center(checkNotNull(findText(beast.window.decorView, "+APPS"))) }
+                instrumentation.runOnMainSync { point = center(checkNotNull(findText(beast.window.decorView, "⌕"))) }
                 return point
             }
             open()
             val (tapX, tapY) = closePoint()
             instrumentation.runOnMainSync {
                 val controller = field<InputController>(phone, "inputController")
+                // Auto-start is disabled to isolate the embedded desktop. Supply the
+                // controller's display for this synthetic phone gesture explicitly.
+                controller.setDisplay(display)
                 controller.handleEvent(TrackpadEvent.Move(
                     (tapX - controller.cursorX) / controller.sensitivity,
                     (tapY - controller.cursorY) / controller.sensitivity,
@@ -145,10 +162,10 @@ class BeastLauncherDismissAndroidTest {
             open()
             instrumentation.runOnMainSync { phone.onBackPressedDispatcher.onBackPressed() }
             closed()
-            // Outside clicks over +APPS must dismiss, without invoking that covered control.
+            // Outside clicks over the apps button dismiss without invoking that covered control.
             open()
             instrumentation.runOnMainSync {
-                val (outsideX, outsideY) = center(checkNotNull(findText(beast.window.decorView, "+APPS")))
+                val (outsideX, outsideY) = center(checkNotNull(findText(beast.window.decorView, "⌕")))
                 val downAt = SystemClock.uptimeMillis()
                 mouse(beast, outsideX, outsideY, MotionEvent.ACTION_DOWN, downAt)
                 mouse(beast, outsideX, outsideY, MotionEvent.ACTION_UP, downAt)
@@ -183,6 +200,8 @@ class BeastLauncherDismissAndroidTest {
                 LauncherSearchSession.close()
                 beast.finish()
                 phone.finish()
+                PrivilegedService.selectBackend(previousBackend)
+                com.lateral.DesktopShellSettings.setAutoStart(context, previousAutoStart)
             }
         }
     }

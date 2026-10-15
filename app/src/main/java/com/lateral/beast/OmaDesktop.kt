@@ -22,7 +22,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import com.lateral.InputSettings
-import com.lateral.OmarchyThemes
+import com.lateral.OmarchyTheme
+import dev.omalauncher.ui.Palette
+import androidx.compose.ui.graphics.toArgb
 import dev.omalauncher.RuntimeOwner
 import dev.omalauncher.ui.LauncherRoot
 import dev.omalauncher.ui.LauncherState
@@ -47,7 +49,7 @@ class OmaDesktop(
     private val appearance: () -> Unit = {
         val selected = InputSettings.theme.id
         if (runtime.themes.picked != selected) {
-            runtime.themes.bundled.firstOrNull { it.name == selected }?.let(runtime.themes::pick)
+            runtime.themes.choices.firstOrNull { it.name == selected }?.let(runtime.themes::pick)
         }
     }
 
@@ -73,9 +75,12 @@ class OmaDesktop(
                 InterceptPlatformTextInput(interceptor) { LauncherRoot(runtime, state) }
             }
             LaunchedEffect(runtime) {
-                snapshotFlow { runtime.themes.picked }.collect { name ->
-                    val theme = OmarchyThemes.all.firstOrNull { it.id == name }
-                    if (theme != null && InputSettings.theme.id != name) InputSettings.setTheme(activity, theme)
+                snapshotFlow { runtime.themes.picked to Palette.current }.collect { (name, palette) ->
+                    val colors = palette.named.mapValues { (_, color) -> "#%06X".format(color.toArgb() and 0xFFFFFF) } +
+                        ("mode" to if (palette.isLight) "light" else "dark")
+                    val title = runtime.themes.choices.firstOrNull { it.name == name }?.title ?: name
+                    val theme = OmarchyTheme.fromPalette(name, title, colors)
+                    if (theme != null && InputSettings.theme != theme) InputSettings.setTheme(activity, theme)
                 }
             }
             LaunchedEffect(state) {

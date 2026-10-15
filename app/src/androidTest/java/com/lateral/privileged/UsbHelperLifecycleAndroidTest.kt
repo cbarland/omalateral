@@ -53,7 +53,7 @@ class UsbHelperLifecycleAndroidTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private val apk get() = instrumentation.targetContext.applicationInfo.sourceDir
 
-    private class Helper(val descriptors: Array<ParcelFileDescriptor>) : Closeable {
+    internal class Helper(val descriptors: Array<ParcelFileDescriptor>) : Closeable {
         val output = ParcelFileDescriptor.AutoCloseInputStream(descriptors[0])
         val input = ParcelFileDescriptor.AutoCloseOutputStream(descriptors[1])
         var pid: Int = 0
@@ -82,7 +82,7 @@ class UsbHelperLifecycleAndroidTest {
     }
 
     private fun quote(value: String) = "'" + value.replace("'", "'\\''") + "'"
-    private fun launch(token: String? = null, adbOnly: Boolean = false, detached: Boolean = false): Helper {
+    internal fun launch(token: String? = null, adbOnly: Boolean = false, detached: Boolean = false): Helper {
         val classpath = if (token == null && !adbOnly && !detached) "$apk:${instrumentation.context.applicationInfo.sourceDir}" else apk
         val entry = if (token == null && !adbOnly && !detached) IsolatedWirelessHelper::class.java.name else PrivilegedServer::class.java.name
         val argument = when { detached -> " --usb-adb-bootstrap"; adbOnly -> " --usb-adb-only"; token != null -> " --usb-lifeline=$token"; else -> " ${prepareWirelessAttempt()}" }
@@ -123,6 +123,8 @@ class UsbHelperLifecycleAndroidTest {
     private fun currentBinder(): IBinder? = (PrivilegedService::class.java
         .getDeclaredMethod("getService").apply { isAccessible = true }
         .invoke(PrivilegedService) as? IPrivilegedService)?.asBinder()
+
+    internal fun currentService(): IPrivilegedService? = currentBinder()?.let(IPrivilegedService.Stub::asInterface)
 
     /** Stage the real ADB callback path, with discovery replaced by our isolated shell publisher. */
     private fun prepareWirelessAttempt(): Long {

@@ -14,7 +14,7 @@ class DecoratorLayoutTest {
         for (density in listOf(1f, 1.3f, 2f, 3f)) {
             for (width in listOf(200, 323, 469, 720)) {
                 val scale = decoratorGeometryScale(2f, width, density)
-                assertTrue(388f * density * scale <= width + .01f)
+                assertTrue(332f * density * scale <= width + .01f)
                 assertTrue(scale in .1f..1.15f)
             }
         }
