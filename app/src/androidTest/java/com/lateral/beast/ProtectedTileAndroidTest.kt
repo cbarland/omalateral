@@ -48,6 +48,10 @@ class ProtectedTileAndroidTest {
                     appendLine("Timed out: $label")
                     appendLine(shell("run-as ${instrumentation.context.packageName} cat shared_prefs/protected-fixture-input.xml"))
                     appendLine(shell("dumpsys input"))
+                    appendLine("WINDOW MANAGER")
+                    appendLine(shell("dumpsys window"))
+                    appendLine("ACTIVITY TASKS")
+                    appendLine(shell("dumpsys activity activities"))
                     appendLine(shell("dumpsys SurfaceFlinger"))
                 })
             }
@@ -88,7 +92,7 @@ class ProtectedTileAndroidTest {
                     onDisplayReady={ source=it }
                 }.also { root.addView(it,FrameLayout.LayoutParams(480,640).apply { leftMargin=40; topMargin=80 }) }
                 ordinary=TaskSurfaceView(host).apply {
-                    task=BeastTask(-891L,instrumentation.context.packageName,FixtureOneActivity::class.java.name,"Ordinary","NORMAL")
+                    task=BeastTask(-891L,instrumentation.context.packageName,SecureSecondFixtureActivity::class.java.name,"Ordinary","NORMAL")
                     onDisplayReady={ ordinarySource=it }
                 }.also { root.addView(it,FrameLayout.LayoutParams(360,640).apply { leftMargin=620; topMargin=80 }) }
                 root.addView(View(host).apply { setBackgroundColor(Color.GREEN); setOnClickListener { chromeTaps++ } },
@@ -127,7 +131,9 @@ class ProtectedTileAndroidTest {
             val capture=File(directory,"secure-capture.png")
             shell("screencap -p -d $physical ${capture.absolutePath}")
             val image=checkNotNull(android.graphics.BitmapFactory.decodeFile(capture.absolutePath))
-            assertTrue("Protected marker excluded from screenshot",marker(image)<.001)
+            val firstTile=Bitmap.createBitmap(image,40,80,540,640)
+            assertTrue("Protected marker excluded from screenshot",marker(firstTile)<.001)
+            firstTile.recycle()
             assertEquals("Chrome above native tile remains visible",Color.GREEN,image.getPixel(150,180))
             image.recycle()
             fun inputCount(name: String, prefs: String = "protected-fixture-input"): Int {
@@ -159,8 +165,12 @@ class ProtectedTileAndroidTest {
             await("protected keyboard") { inputCount("keys")>before }
             service.text(source,"hello")
             await("protected text") { shell("run-as ${instrumentation.context.packageName} cat shared_prefs/protected-fixture-input.xml").contains("hello") }
+            val initialMode=checkNotNull(context.getSystemService(DisplayManager::class.java).getDisplay(source)).mode
             ui { tile!!.layoutParams=FrameLayout.LayoutParams(540,540).apply { leftMargin=40; topMargin=80 } }
             Thread.sleep(700)
+            val protectedMode=checkNotNull(context.getSystemService(DisplayManager::class.java).getDisplay(source)).mode
+            assertEquals("Protected source width stays stable while the tile changes",initialMode.physicalWidth,protectedMode.physicalWidth)
+            assertEquals("Protected source height stays stable while the tile changes",initialMode.physicalHeight,protectedMode.physicalHeight)
             before=inputCount("taps")
             service.clickTouch(source,240,300)
             await("input after resize") { inputCount("taps")>before }
@@ -192,6 +202,11 @@ class ProtectedTileAndroidTest {
             secure(false)
             await("ordinary rendering restored") { ui { tile!!.captureBitmap()?.let {
                 image -> val value=marker(image); image.recycle(); value>.85 } ?: false } }
+            await("ordinary source resize resumes") {
+                checkNotNull(context.getSystemService(DisplayManager::class.java).getDisplay(source)).mode.let {
+                    it.physicalWidth != initialMode.physicalWidth && it.physicalHeight != initialMode.physicalHeight
+                }
+            }
             assertTrue(ui { ordinary!!.canCapture() })
             await("last ordinary tile releases host trust") { !hostTrusted() }
             secure(true)

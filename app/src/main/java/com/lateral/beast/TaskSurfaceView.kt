@@ -36,8 +36,12 @@ class TaskSurfaceView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
 ) : FrameLayout(context, attrs), TextureView.SurfaceTextureListener {
     private val textureView = TextureView(context)
-    private val protectedTile = ProtectedTileSurface(context) { protected ->
+    private val protectedTile = ProtectedTileSurface(context, ::onProtectionChanged)
+    private fun onProtectionChanged(protected: Boolean) {
         textureView.alpha = if (protected) 0f else 1f
+        if (!protected) post {
+            if (!released && isAvailable && !protectedTile.protectedContent) resizeIfNeeded(width, height)
+        }
         onAvailabilityChanged?.invoke(isAvailable)
     }
     val isAvailable: Boolean get() = textureView.isAvailable
@@ -156,7 +160,7 @@ class TaskSurfaceView @JvmOverloads constructor(
     }
 
     private fun refreshProtectedTile() {
-        protectedTile.bind(if (released) null else displayId, renderWidth(), renderHeight(), nativePhoneInput)
+        protectedTile.bind(if (released) null else displayId, hostedWidth(), hostedHeight(), nativePhoneInput)
     }
 
     override fun onAttachedToWindow() {
@@ -242,7 +246,7 @@ class TaskSurfaceView @JvmOverloads constructor(
                 return
             }
             PrivilegedService.setVirtualDisplaySurface(id, surface)
-            PrivilegedService.resizeVirtualDisplay(
+            if (!protectedTile.protectedContent) PrivilegedService.resizeVirtualDisplay(
                 id, renderWidth(), renderHeight(), targetDensityDpi,
             )
             task?.androidTaskId?.let { taskId ->
@@ -316,7 +320,7 @@ class TaskSurfaceView @JvmOverloads constructor(
         val local = localPointForGlobal(globalX, globalY) ?: return false
         onInteraction?.invoke()
         val adjustedScale = adjustPinchScale(scale)
-        val baseSpan = (minOf(renderWidth(), renderHeight()) * PINCH_BASE_SPAN_FRACTION)
+        val baseSpan = (minOf(hostedWidth(), hostedHeight()) * PINCH_BASE_SPAN_FRACTION)
             .toInt().coerceAtLeast(1)
         val targetSpan = (baseSpan * adjustedScale).toInt().coerceIn(PINCH_MIN_SPAN_PX, PINCH_MAX_SPAN_PX)
         PrivilegedService.pinchOnDisplay(
@@ -433,8 +437,8 @@ class TaskSurfaceView @JvmOverloads constructor(
         if (!getGlobalVisibleRect(visible) || visible.width() <= 0 || visible.height() <= 0 ||
             (requireInside && !visible.contains(globalX, globalY))
         ) return null
-        val targetWidth = renderWidth()
-        val targetHeight = renderHeight()
+        val targetWidth = hostedWidth()
+        val targetHeight = hostedHeight()
         val x = ((globalX - visible.left).toFloat() / visible.width() * targetWidth)
             .toInt().coerceIn(0, targetWidth - 1)
         val y = ((globalY - visible.top).toFloat() / visible.height() * targetHeight)
@@ -542,6 +546,10 @@ class TaskSurfaceView @JvmOverloads constructor(
 
     private fun resizeIfNeeded(width: Int, height: Int) {
         refreshProtectedTile()
+        // A secure app stays at its existing virtual-display size. Tile geometry
+        // may change freely, but resizing the source while Android animates it can
+        // leave that activity in DROP_INPUT mode on the external display.
+        if (protectedTile.protectedContent) return
         val id = displayId ?: return
         val w = renderWidth(width)
         val h = renderHeight(height)
@@ -566,11 +574,11 @@ class TaskSurfaceView @JvmOverloads constructor(
         val texture = surfaceTexture ?: return
         val surface = outputSurface?.takeIf(Surface::isValid) ?: return
         val id = displayId ?: return
-        val w = renderWidth()
-        val h = renderHeight()
+        val w = hostedWidth()
+        val h = hostedHeight()
         configureBuffer(texture, width, height)
         PrivilegedService.setVirtualDisplaySurface(id, surface)
-        PrivilegedService.resizeVirtualDisplay(id, w, h, targetDensityDpi)
+        if (!protectedTile.protectedContent) PrivilegedService.resizeVirtualDisplay(id, w, h, targetDensityDpi)
         lastWidth = w
         lastHeight = h
         lastDensityDpi = targetDensityDpi
@@ -766,8 +774,14 @@ class TaskSurfaceView @JvmOverloads constructor(
     }
 
     private fun configureBuffer(texture: SurfaceTexture, viewWidth: Int, viewHeight: Int) {
-        texture.setDefaultBufferSize(renderWidth(viewWidth), renderHeight(viewHeight))
+        texture.setDefaultBufferSize(
+            if (protectedTile.protectedContent) hostedWidth() else renderWidth(viewWidth),
+            if (protectedTile.protectedContent) hostedHeight() else renderHeight(viewHeight),
+        )
     }
+
+    private fun hostedWidth(): Int = if (protectedTile.protectedContent && lastWidth > 0) lastWidth else renderWidth()
+    private fun hostedHeight(): Int = if (protectedTile.protectedContent && lastHeight > 0) lastHeight else renderHeight()
 
     private fun renderWidth(viewWidth: Int = width): Int =
         (viewWidth.coerceAtLeast(1) * renderScale).roundToInt().coerceAtLeast(1)
@@ -776,8 +790,8 @@ class TaskSurfaceView @JvmOverloads constructor(
         (viewHeight.coerceAtLeast(1) * renderScale).roundToInt().coerceAtLeast(1)
 
     private fun renderPoint(x: Float, y: Float): Pair<Int, Int> =
-        (x * renderScale).roundToInt().coerceIn(0, renderWidth() - 1) to
-            (y * renderScale).roundToInt().coerceIn(0, renderHeight() - 1)
+        (x / width.coerceAtLeast(1) * hostedWidth()).roundToInt().coerceIn(0, hostedWidth() - 1) to
+            (y / height.coerceAtLeast(1) * hostedHeight()).roundToInt().coerceIn(0, hostedHeight() - 1)
 
     fun release() {
         if (released) return

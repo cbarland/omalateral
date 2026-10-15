@@ -36,6 +36,10 @@ signatures must not be packaged into an APK; use `scripts/verify-hidden-api-pack
   stays unavailable.
 - Focused-app capture is disabled for a protected tile. Normal screenshots still
   exclude its protected pixels; chrome and ordinary tiles remain capturable.
+- A protected app keeps its current virtual-display dimensions while its tile is
+  resized. The native mirror scales to the new tile bounds; once the app clears
+  `FLAG_SECURE`, the source display catches up to the tile size. This avoids an
+  Android input-disabled transition during secure presentation.
 
 This is secure presentation, not DRM decoding or a guarantee that every banking,
 streaming, or device-policy-restricted application supports external displays.
@@ -48,20 +52,19 @@ close/reopen the external workspace to destroy its old host surface before retry
 - `stableDebug` and test APK builds and JVM tests pass in the isolated secure-presentation worktree.
 - On emulator-5554 with a temporary 3840 × 1200 secure overlay, the fixture passes
   source/output/host rejection, protected clone composition, screenshot exclusion,
-  chrome interaction, and protected taps, scroll, keys, and text before resize.
-- The fixture currently fails at `input after resize`: both the routed click and a
-  direct physical-display tap land on the cloned `ActivityRecordInputSink` rather than
-  the secure app after a 480 × 640 to 540 × 540 tile resize. The clone geometry is
-  correct, so the input-window ordering or hit testing needs repair before this head
-  is ready for review. Do not count the later restore and cleanup assertions as passed.
+  chrome interaction, protected taps, scroll, keys, and text, tile resize, hide and
+  restore, two protected tiles, and graceful helper cleanup. The second tile starts
+  in its fixture activity and toggles `FLAG_SECURE` there; launching a new secure
+  activity across tasks is outside this fixture.
 - A physical Nubia display has not been tested for this split.
 
 The instrumented fixture is `com.lateral.beast.ProtectedTileAndroidTest`; it requires
-an emulator with an already-secure secondary display supplied as `protectedDisplayId`.
+an emulator with an already-secure secondary display. Set `protectedDisplayId` only
+when selecting among multiple secure outputs.
 The fixture writes diagnostics to `test-captures/protected-flat/` in the app's external files directory.
 
 ```powershell
 ./gradlew.bat :app:assembleStableDebug :app:assembleStableDebugAndroidTest :app:testStableDebugUnitTest '-Plateral.vitureSdk=false'
 python scripts/verify-hidden-api-packaging.py app/build/outputs/apk/stable/debug/app-stable-debug.apk
-adb -s emulator-5554 shell am instrument -w -r -e class com.lateral.beast.ProtectedTileAndroidTest -e protectedDisplayId 2 com.omalateral.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-5554 shell am instrument -w -r -e class com.lateral.beast.ProtectedTileAndroidTest com.omalateral.test/androidx.test.runner.AndroidJUnitRunner
 ```
