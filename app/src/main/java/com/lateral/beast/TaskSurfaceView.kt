@@ -11,6 +11,7 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.TextureView
+import android.widget.FrameLayout
 import com.lateral.InputSettings
 import com.lateral.MainActivity
 import com.lateral.PhoneView
@@ -33,10 +34,22 @@ private object RetainedTaskDisplays {
 class TaskSurfaceView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
-) : TextureView(context, attrs), TextureView.SurfaceTextureListener {
+) : FrameLayout(context, attrs), TextureView.SurfaceTextureListener {
+    private val textureView = TextureView(context)
+    private val protectedTile = ProtectedTileSurface(context) { protected ->
+        textureView.alpha = if (protected) 0f else 1f
+        onAvailabilityChanged?.invoke(isAvailable)
+    }
+    val isAvailable: Boolean get() = textureView.isAvailable
+    private val surfaceTexture: SurfaceTexture? get() = textureView.surfaceTexture
     var task: BeastTask? = null
     var onDisplayReady: ((Int) -> Unit)? = null
     var nativePhoneInput = false
+        set(value) {
+            if (field == value) return
+            field = value
+            refreshProtectedTile()
+        }
     var onAvailabilityChanged: ((Boolean) -> Unit)? = null
     var onTaskHosted: (() -> Unit)? = null
     var onRestoreFailed: ((PrivilegedService.FocusRestoreResult) -> Unit)? = null
@@ -64,7 +77,10 @@ class TaskSurfaceView @JvmOverloads constructor(
     private var observedHelperGeneration = PrivilegedService.helperGeneration
     private var displayId: Int?
         get() = ownedDisplayId?.takeIf { displayHelperGeneration == PrivilegedService.helperGeneration }
-        set(value) { ownedDisplayId = value; displayHelperGeneration = PrivilegedService.helperGeneration }
+        set(value) {
+            ownedDisplayId = value; displayHelperGeneration = PrivilegedService.helperGeneration
+            refreshProtectedTile()
+        }
     private val helperListener: () -> Unit = {
         mainHandler.post { syncHelperSession() }
         Unit
@@ -129,12 +145,23 @@ class TaskSurfaceView @JvmOverloads constructor(
 
     init {
         PrivilegedService.addListener(helperListener)
-        surfaceTextureListener = this
-        isOpaque = true
+        textureView.surfaceTextureListener = this
+        textureView.isOpaque = true
+        addView(protectedTile, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        addView(textureView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         isFocusable = true
         isFocusableInTouchMode = true
         setOnTouchListener { _, event -> forwardTouch(event) }
         setOnGenericMotionListener { _, event -> forwardGenericMotion(event) }
+    }
+
+    private fun refreshProtectedTile() {
+        protectedTile.bind(if (released) null else displayId, renderWidth(), renderHeight(), nativePhoneInput)
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        refreshProtectedTile()
     }
 
     override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
@@ -161,11 +188,13 @@ class TaskSurfaceView @JvmOverloads constructor(
             schedulePhoneFocusRepairAfterReattach(generation)
         } ?: createDisplayWhenReady()
         scheduleFrameWatchdog(generation)
+        refreshProtectedTile()
     }
 
     override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
         configureBuffer(texture, width, height)
         resizeIfNeeded(width, height)
+        refreshProtectedTile()
     }
 
     override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
@@ -265,10 +294,10 @@ class TaskSurfaceView @JvmOverloads constructor(
     /** Copies the current hosted app frame without including BeastUI chrome. */
     fun captureBitmap(): Bitmap? {
         if (!canCapture()) return null
-        return runCatching { getBitmap() }.getOrNull()
+        return runCatching { textureView.getBitmap() }.getOrNull()
     }
 
-    fun canCapture(): Boolean = isAvailable && displayId != null && width > 0 && height > 0
+    fun canCapture(): Boolean = !protectedTile.protectedContent && isAvailable && displayId != null && width > 0 && height > 0
 
     /** Routes a wheel frame directly to this app's virtual display when the cursor is over it. */
     fun routeScrollAt(globalX: Int, globalY: Int, amount: Float): Boolean {
@@ -512,6 +541,7 @@ class TaskSurfaceView @JvmOverloads constructor(
     }
 
     private fun resizeIfNeeded(width: Int, height: Int) {
+        refreshProtectedTile()
         val id = displayId ?: return
         val w = renderWidth(width)
         val h = renderHeight(height)

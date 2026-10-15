@@ -1,3 +1,3 @@
 package com.lateral.privileged
 
-internal object PrivilegedProtocol { const val VERSION = 1 }
+internal object PrivilegedProtocol { const val VERSION = 2 }

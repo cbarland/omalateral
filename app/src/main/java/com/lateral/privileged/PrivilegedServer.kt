@@ -27,6 +27,7 @@ import android.view.Display
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Surface
+import android.view.SurfaceControl
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
@@ -68,7 +69,70 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
     private var context: Context? = null
 
     /** Trusted virtual displays created for the workspace, keyed by display id. */
-    private val virtualDisplays = HashMap<Int, VirtualDisplay>()
+    private val virtualDisplays = java.util.concurrent.ConcurrentHashMap<Int, VirtualDisplay>()
+    private val protectedOutputs = HashMap<IBinder, ProtectedDisplayOutput>()
+
+    override fun openProtectedOutput(outputDisplayId: Int, sourceDisplayId: Int, parent: SurfaceControl,
+        hostWindow: SurfaceControl, owner: IBinder,
+        listener: IProtectedDisplayListener): SurfaceControl? {
+        // A mirror is presentation on an existing secure output, never secure capture.
+        val caller = Binder.getCallingUid()
+        val appUid = runCatching { baseContext()?.packageManager?.getApplicationInfo(PHONE_UI_PACKAGE, 0)?.uid }.getOrNull()
+        if (destroying.get() || Build.VERSION.SDK_INT < 35 || outputDisplayId == Display.DEFAULT_DISPLAY ||
+            appUid == null || caller != appUid ||
+            !parent.isValid || !hostWindow.isValid || !virtualDisplays.containsKey(sourceDisplayId)) {
+            parent.release(); hostWindow.release(); return null
+        }
+        val output = displayManager()?.getDisplay(outputDisplayId) ?: run { parent.release(); hostWindow.release(); return null }
+        if (output.flags and Display.FLAG_SECURE == 0 ||
+            synchronized(virtualDisplays) { virtualDisplays.containsKey(outputDisplayId) }) {
+            parent.release(); hostWindow.release(); return null
+        }
+        return synchronized(protectedOutputs) {
+            protectedOutputs.remove(owner)?.close()
+            runCatching {
+                val native = ProtectedDisplayOutput(outputDisplayId, parent, hostWindow, owner, caller, listener,
+                    { id -> id == sourceDisplayId && virtualDisplays.containsKey(id) },
+                    checkNotNull(windowManagerService()), { closed -> synchronized(protectedOutputs) {
+                        if (protectedOutputs[owner] === closed) protectedOutputs.remove(owner)
+                    } })
+                protectedOutputs[owner] = native
+                native.surfaceRoot
+            }.onFailure { parent.release(); hostWindow.release(); Log.e(TAG, "Protected output unavailable", it) }.getOrNull()
+        }
+    }
+
+    override fun updateProtectedOutput(owner: IBinder, sequence: Long, width: Int, height: Int,
+        eyeCount: Int, sources: IntArray, eyes: IntArray, slices: FloatArray) {
+        synchronized(protectedOutputs) { protectedOutputs[owner] }?.submit(
+            ProtectedDisplayOutput.Frame(sequence, width, height, eyeCount, sources, eyes, slices))
+    }
+
+    override fun closeProtectedOutput(owner: IBinder) {
+        synchronized(protectedOutputs) { protectedOutputs.remove(owner) }?.close()
+    }
+
+    private fun protectedOutput(displayId: Int): ProtectedDisplayOutput? = synchronized(protectedOutputs) {
+        protectedOutputs.values.firstOrNull { it.protects(displayId) }
+    }
+
+    /** Prepare only the existing, visible glasses host. Never focus or move a phone task. */
+    private fun prepareProtectedKeyboard(output: ProtectedDisplayOutput): Boolean = runCatching {
+        // Re-focusing an already prepared task between DOWN and UP cancels the
+        // pressed key. Its original host remains focusable while a clone owns focus.
+        if (output.hostReadyForKeyboard()) return true
+        val name = output.hostWindowName() ?: return false
+        val host = observedTasks().firstOrNull { it.displayId == output.displayId &&
+            (name.contains(ComponentName(it.packageName, it.className).flattenToString()) ||
+                name.contains(ComponentName(it.packageName, it.className).flattenToShortString())) } ?: return false
+        val manager = activityTaskManagerService()
+        manager.javaClass.getMethod("setFocusedTask", Int::class.javaPrimitiveType).invoke(manager, host.taskId)
+        // Task focus is asynchronous. Wait for committed input-window metadata,
+        // on the input lane only, before requesting focus for the native clone.
+        val deadline = SystemClock.uptimeMillis()+250
+        while (!output.hostReadyForKeyboard() && SystemClock.uptimeMillis() < deadline) SystemClock.sleep(8)
+        output.hostReadyForKeyboard()
+    }.onFailure { Log.w(TAG, "Could not prepare protected keyboard focus", it) }.getOrDefault(false)
     @Volatile private var lastImeRoutingError = ""
     private val imePolicyLock = Any()
     private val sessionImeLock = Any()
@@ -115,6 +179,11 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         cleanup("session IME") { synchronized(sessionImeLock) { restoreSessionImeInternal("helper shutdown") } }
         cleanup("legacy audio route") { setBeastMediaRoutingEnabled(false) }
         cleanup("native input") { nativeMouse?.close(); nativeMouse = null }
+        cleanup("protected output") {
+            val outputs = synchronized(protectedOutputs) { protectedOutputs.values.toList().also { protectedOutputs.clear() } }
+            outputs.forEach { it.close() }
+            outputs.forEach { it.awaitClosed() }
+        }
         cleanup("virtual displays") { releaseAllDisplays() }
         exitProcess(0)
     }
@@ -349,7 +418,7 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
     }
 
     override fun tap(displayId: Int, x: Int, y: Int) {
-        run("input", "-d", displayId.toString(), "tap", x.toString(), y.toString())
+        injectTouchClick(displayId, x, y)
     }
 
     override fun swipe(
@@ -360,6 +429,16 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         toY: Int,
         durationMs: Int,
     ) {
+        if (protectedOutput(displayId) != null) {
+            val steps = (durationMs / 12).coerceIn(2, 300)
+            injectTouch(displayId, fromX, fromY, 0)
+            for (step in 1..steps) {
+                SystemClock.sleep((durationMs.coerceAtLeast(0) / steps).toLong())
+                injectTouch(displayId, fromX+(toX-fromX)*step/steps, fromY+(toY-fromY)*step/steps, 1)
+            }
+            injectTouch(displayId, toX, toY, 2)
+            return
+        }
         run(
             "input", "-d", displayId.toString(), "swipe",
             fromX.toString(), fromY.toString(), toX.toString(), toY.toString(),
@@ -368,7 +447,11 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
     }
 
     override fun key(displayId: Int, keyCode: Int) {
-        run("input", "-d", displayId.toString(), "keyevent", keyCode.toString())
+        if (protectedOutput(displayId) != null) {
+            val now = SystemClock.uptimeMillis()
+            nativeKey(displayId, KeyEvent.ACTION_DOWN, keyCode, 0, 0, now, now)
+            nativeKey(displayId, KeyEvent.ACTION_UP, keyCode, 0, 0, now, SystemClock.uptimeMillis())
+        } else run("input", "-d", displayId.toString(), "keyevent", keyCode.toString())
     }
 
     /** Hosted windows need their own focus so injected clicks can activate editors.
@@ -385,17 +468,52 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
 
     override fun nativeKey(displayId: Int, action: Int, keyCode: Int, repeatCount: Int, metaState: Int, downTime: Long, eventTime: Long) {
         if (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP) return
+        val native = protectedOutput(displayId)
         val event = KeyEvent(downTime, eventTime, action, keyCode, repeatCount, metaState,
             android.view.KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, InputDevice.SOURCE_KEYBOARD)
         val managerClass = Class.forName("android.hardware.input.InputManager")
         val manager = managerClass.getMethod("getInstance").invoke(null)
+        if (native != null) {
+            // A first key on a different top-focused display makes policy re-focus
+            // the host after our clone request. Prepare the host before selecting
+            // the clone, rather than letting that policy transition eat DOWN.
+            if (!prepareProtectedKeyboard(native)) return
+            val inject = managerClass.getMethod("injectInputEvent", android.view.InputEvent::class.java,
+                Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+            // Policy may focus the output's host on the first key. Retry only rejected,
+            // UID-targeted injection; an accepted event must never be sent twice.
+            val deadline = SystemClock.uptimeMillis()+250
+            do {
+                val target = native.keyTarget(displayId) ?: return
+                event.javaClass.getMethod("setDisplayId", Int::class.javaPrimitiveType).invoke(event, target.displayId)
+                val accepted = runCatching { inject.invoke(manager, event, 1, target.uid) == true }.getOrDefault(false)
+                if (accepted) return
+                // WindowManager may have queued more than one host-focus transaction.
+                // Give that transition a frame opportunity on the independent input lane.
+                SystemClock.sleep(8)
+            } while (SystemClock.uptimeMillis() < deadline)
+            Log.w(TAG, "Protected key could not acquire its original app's input focus")
+            return
+        }
         event.javaClass.getMethod("setDisplayId", Int::class.javaPrimitiveType).invoke(event, displayId)
         managerClass.getMethod("injectInputEvent", android.view.InputEvent::class.java, Int::class.javaPrimitiveType)
             .invoke(manager, event, 0)
     }
 
     override fun text(displayId: Int, value: String) {
-        run("input", "-d", displayId.toString(), "text", value)
+        if (protectedOutput(displayId) != null) {
+            val keys = android.view.KeyCharacterMap.load(android.view.KeyCharacterMap.VIRTUAL_KEYBOARD)
+                .getEvents(value.replace("%s", " ").toCharArray()) ?: run {
+                Log.w(TAG, "Virtual keyboard could not map protected text"); return
+            }
+            val pressedAt = HashMap<Int, Long>()
+            keys.forEach {
+                val now = SystemClock.uptimeMillis()
+                if (it.action == KeyEvent.ACTION_DOWN) pressedAt[it.keyCode] = now
+                nativeKey(displayId, it.action, it.keyCode, it.repeatCount, it.metaState, pressedAt[it.keyCode] ?: now, now)
+                if (it.action == KeyEvent.ACTION_UP) pressedAt.remove(it.keyCode)
+            }
+        } else run("input", "-d", displayId.toString(), "text", value)
     }
 
     override fun getFocusedEditorInfo(displayId: Int): IntArray {
@@ -977,6 +1095,9 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
      */
     override fun injectScroll(displayId: Int, x: Int, y: Int, vScroll: Float) {
         try {
+            val native = protectedOutput(displayId)
+            val route = native?.route(displayId, x.toFloat(), y.toFloat(), false)
+            if (native != null && route == null) return
             val injector = obtainInjector() ?: run {
                 Log.e(TAG, "scroll: InputManager unavailable")
                 return
@@ -990,8 +1111,8 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
             )
             val coords = arrayOf(
                 MotionEvent.PointerCoords().apply {
-                    this.x = x.toFloat()
-                    this.y = y.toFloat()
+                    this.x = route?.x ?: x.toFloat()
+                    this.y = route?.y ?: y.toFloat()
                     setAxisValue(MotionEvent.AXIS_VSCROLL, vScroll)
                 },
             )
@@ -1003,7 +1124,7 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
             event.source = InputDevice.SOURCE_MOUSE
             runCatching {
                 event.javaClass.getMethod("setDisplayId", Int::class.javaPrimitiveType)
-                    .invoke(event, displayId)
+                    .invoke(event, route?.displayId ?: displayId)
             }
             val injectMethod = injector.javaClass.getMethod(
                 "injectInputEvent",
@@ -1011,7 +1132,9 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
                 Int::class.javaPrimitiveType,
             )
             // 0 = INJECT_INPUT_EVENT_MODE_ASYNC.
-            injectMethod.invoke(injector, event, 0)
+            if (route != null) injector.javaClass.getMethod("injectInputEvent", android.view.InputEvent::class.java,
+                Int::class.javaPrimitiveType, Int::class.javaPrimitiveType).invoke(injector, event, 0, route.uid)
+            else injectMethod.invoke(injector, event, 0)
             event.recycle()
         } catch (t: Throwable) {
             Log.e(TAG, "scroll failed", t)
@@ -1350,6 +1473,9 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         actionButton: Int,
     ) {
         try {
+            val native = protectedOutput(displayId)
+            val route = native?.route(displayId, x.toFloat(), y.toFloat(), action == MotionEvent.ACTION_DOWN)
+            if (native != null && route == null) return
             val injector = obtainInjector() ?: run {
                 Log.e(TAG, "mouse: InputManager unavailable")
                 return
@@ -1364,8 +1490,8 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
                 toolType = MotionEvent.TOOL_TYPE_MOUSE
             })
             val coords = arrayOf(MotionEvent.PointerCoords().apply {
-                this.x = x.toFloat()
-                this.y = y.toFloat()
+                this.x = route?.x ?: x.toFloat()
+                this.y = route?.y ?: y.toFloat()
                 pressure = if (buttonState == 0) 0f else 1f
                 size = 1f
             })
@@ -1383,17 +1509,20 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
             }
             runCatching {
                 event.javaClass.getMethod("setDisplayId", Int::class.javaPrimitiveType)
-                    .invoke(event, displayId)
+                    .invoke(event, route?.displayId ?: displayId)
             }
             val injectMethod = injector.javaClass.getMethod(
                 "injectInputEvent",
                 android.view.InputEvent::class.java,
                 Int::class.javaPrimitiveType,
             )
-            injectMethod.invoke(injector, event, 0)
+            if (route != null) injector.javaClass.getMethod("injectInputEvent", android.view.InputEvent::class.java,
+                Int::class.javaPrimitiveType, Int::class.javaPrimitiveType).invoke(injector, event, 0, route.uid)
+            else injectMethod.invoke(injector, event, 0)
             event.recycle()
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
                 mouseDownAt.remove(displayId)
+                native?.endGesture()
             }
         } catch (t: Throwable) {
             Log.e(TAG, "mouse injection failed", t)
@@ -1514,6 +1643,16 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         p1: FloatArray?,
         injectionMode: Int = 0,
     ): Boolean {
+        val native = protectedOutput(displayId)
+        val entering = action and MotionEvent.ACTION_MASK == MotionEvent.ACTION_DOWN
+        val routed0 = native?.route(displayId, p0[0], p0[1], entering, 0)
+        val routed1 = if (native != null && p1 != null) native.route(displayId, p1[0], p1[1],
+            action and MotionEvent.ACTION_MASK == MotionEvent.ACTION_POINTER_DOWN, 1) else null
+        if (native != null && (routed0 == null || (p1 != null && routed1 == null))) {
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) native.endGesture()
+            return false
+        }
+        val targetDisplay = routed0?.displayId ?: displayId
         val count = if (p1 == null) 1 else 2
         val props = Array(count) { idx ->
             MotionEvent.PointerProperties().apply {
@@ -1522,10 +1661,11 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
             }
         }
         val coords = Array(count) { idx ->
+            val route = if (idx == 0) routed0 else routed1
             val src = if (idx == 0) p0 else p1!!
             MotionEvent.PointerCoords().apply {
-                x = src[0]
-                y = src[1]
+                x = route?.x ?: src[0]
+                y = route?.y ?: src[1]
                 pressure = 1f
                 size = 1f
             }
@@ -1541,23 +1681,25 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         // event to display 0 (the phone screen) instead of the virtual display.
         val setOk = runCatching {
             event.javaClass.getMethod("setDisplayId", Int::class.javaPrimitiveType)
-                .invoke(event, displayId)
+                .invoke(event, targetDisplay)
         }.isSuccess
         val actualDisplayId = runCatching {
             event.javaClass.getMethod("getDisplayId").invoke(event) as? Int
         }.getOrNull() ?: -1
-        if (!setOk || actualDisplayId != displayId) {
-            Log.w(TAG, "displayId mismatch: setOk=$setOk wanted=$displayId got=$actualDisplayId")
+        if (!setOk || actualDisplayId != targetDisplay) {
+            Log.w(TAG, "displayId mismatch: setOk=$setOk wanted=$targetDisplay got=$actualDisplayId")
+            event.recycle()
+            return false
         }
-        val injectMethod = injector.javaClass.getMethod(
-            "injectInputEvent",
-            android.view.InputEvent::class.java,
-            Int::class.javaPrimitiveType,
-        )
+        val injectMethod = if (routed0 != null) injector.javaClass.getMethod("injectInputEvent",
+            android.view.InputEvent::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+        else injector.javaClass.getMethod("injectInputEvent", android.view.InputEvent::class.java, Int::class.javaPrimitiveType)
         // 0 = ASYNC, 2 = WAIT_FOR_FINISH. Returns Boolean — false means the
         // dispatcher rejected the event (permission, no window, wrong display, …).
-        val result = injectMethod.invoke(injector, event, injectionMode)
+        val result = if (routed0 != null) injectMethod.invoke(injector, event, injectionMode, routed0.uid)
+            else injectMethod.invoke(injector, event, injectionMode)
         event.recycle()
+        if (native != null && (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL)) native.endGesture()
         return (result as? Boolean) ?: false
     }
 

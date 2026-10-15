@@ -387,6 +387,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         BeastInputRouter.attach(this)
         if (!phoneViewSession) {
             OmarchyShortcuts.handler = omarchyShortcutHandler
+            OmarchyShortcuts.modifiersChanged = { held -> if (::root.isInitialized) ProtectedTileInputRegions.windowControls(root, held) }
         }
         activeInstances.incrementAndGet()
         // REDMAGIC OS does not create PhoneWindow's DecorView until setContentView().

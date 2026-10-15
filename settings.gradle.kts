@@ -25,6 +25,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "omalateral"
 include(":app")
+include(":android-hidden-api")
 include(":omalauncher", ":owl")
 project(":omalauncher").projectDir = file("third_party/omalauncher/app")
 project(":omalauncher").buildFileName = "omalateral.gradle.kts"

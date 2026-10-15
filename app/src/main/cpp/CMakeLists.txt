@@ -21,3 +21,5 @@ else()
     add_library(lateral_beast_control SHARED beast_display_control_stub.cpp)
     target_link_libraries(lateral_beast_control android log)
 endif()
+
+target_sources(lateral_beast_control PRIVATE protected_host_surface.cpp)

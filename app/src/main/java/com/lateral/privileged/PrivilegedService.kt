@@ -184,6 +184,47 @@ object PrivilegedService {
     private val control = Executors.newSingleThreadExecutor { Thread(it, "lateral-helper-control") }
     private val initializer = Executors.newCachedThreadPool { Thread(it, "lateral-helper-init").apply { isDaemon = true } }
     private val worker = Executors.newSingleThreadExecutor { Thread(it, "lateral-privileged") }
+    private val protectedWorker = Executors.newSingleThreadExecutor { Thread(it, "lateral-protected-submit") }
+    private val protectedPending = java.util.concurrent.ConcurrentHashMap<IBinder, () -> Unit>()
+    private val protectedScheduled = AtomicBoolean(false)
+
+    fun openProtectedOutputAsync(displayId: Int, sourceDisplayId: Int, parent: android.view.SurfaceControl,
+        hostWindow: android.view.SurfaceControl, owner: IBinder, listener: IProtectedDisplayListener,
+        callback: (android.view.SurfaceControl?) -> Unit) {
+        val expected = currentSession
+        worker.execute {
+            val result = invoke(expected, null) { it.openProtectedOutput(displayId, sourceDisplayId, parent, hostWindow, owner, listener) }
+            mainHandler.post {
+                if (sessions.matches(expected) && state == State.READY) callback(result)
+                else { result?.release(); callback(null) }
+            }
+        }
+    }
+
+    fun updateProtectedOutput(owner: IBinder, generation: Long, sequence: Long, width: Int, height: Int,
+        sources: IntArray, slices: FloatArray) {
+        val expected = currentSession?.takeIf { it.generation == generation } ?: return
+        protectedPending[owner] = {
+            invoke(expected, Unit) { it.updateProtectedOutput(owner, sequence, width, height, 1, sources, IntArray(sources.size), slices) }
+        }
+        scheduleProtectedDrain()
+    }
+
+    private fun scheduleProtectedDrain() {
+        if (protectedScheduled.compareAndSet(false, true)) protectedWorker.execute {
+            try { protectedPending.keys.toList().forEach { protectedPending.remove(it)?.invoke() } }
+            finally {
+                protectedScheduled.set(false)
+                if (protectedPending.isNotEmpty()) scheduleProtectedDrain()
+            }
+        }
+    }
+
+    fun closeProtectedOutput(owner: IBinder, generation: Long = helperGeneration) {
+        protectedPending.remove(owner)
+        val expected = currentSession?.takeIf { it.generation == generation } ?: return
+        worker.execute { invoke(expected, Unit) { it.closeProtectedOutput(owner) } }
+    }
     /** Pinch pacing must never occupy the lane used by clicks, keys, and task actions. */
     private val pinchWorker = Executors.newSingleThreadExecutor { Thread(it, "lateral-pinch") }
     private val pendingPinch = AtomicReference<PinchRequest?>(null)

@@ -4,6 +4,8 @@
 package com.lateral.privileged;
 
 import android.view.Surface;
+import android.view.SurfaceControl;
+import com.lateral.privileged.IProtectedDisplayListener;
 import android.os.IBinder;
 import com.lateral.privileged.IPrivilegedHotkeyListener;
 
@@ -193,4 +195,10 @@ interface IPrivilegedService {
     void setPhoneNavigationObserverReady(boolean ready) = 49;
     /** Replace the global shortcut table. Entries are actionCode|modifierMask|AndroidKeyCode. */
     void setHotkeyBindings(in String[] bindings) = 50;
+    /** Native presentation only: source must be owned and output must already be secure. */
+    SurfaceControl openProtectedOutput(int outputDisplayId, int sourceDisplayId,
+        in SurfaceControl parent, in SurfaceControl hostWindow, IBinder owner, IProtectedDisplayListener listener) = 52;
+    oneway void updateProtectedOutput(IBinder owner, long sequence, int width, int height,
+        int eyeCount, in int[] sources, in int[] eyes, in float[] slices) = 53;
+    oneway void closeProtectedOutput(IBinder owner) = 54;
 }

@@ -103,6 +103,7 @@ android {
 }
 
 dependencies {
+    compileOnly(project(":android-hidden-api"))
     implementation(project(":omalauncher"))
     implementation("com.lateral.thirdparty:florisboard-embedded:0.5.2-lateral.1")
     implementation(libs.androidx.appcompat)
