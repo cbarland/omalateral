@@ -23,10 +23,14 @@ the screenshot.
   provider-requested owner-profile component before creating a managed task.
 - On the same emulator with a temporary secure secondary overlay, Gallery
   capture passes image decoding, physical-output sizing, and nonempty inherited
-  home/widget content. The protected fixture separately passes capture exclusion
-  before its known input-after-resize failure.
-- The stacked secure-presentation branch still fails protected touch after a
-  480 × 640 to 540 × 540 tile resize. That failure blocks submitting the stack.
+  home/widget content. The integrated protected fixture passes composed capture
+  exclusion, touch after tile resize and restore, two protected tiles, and helper
+  shutdown cleanup.
+- One back-to-back bridge fixture run triggered an emulator system-server watchdog
+  while the 3840 × 1200 overlay and another virtual display were active. The
+  watchdog recorded heavy graphics-composer and SurfaceFlinger CPU use; the live
+  surface and Gallery tests passed separately after a reboot. Treat long combined
+  emulator runs as a device-capacity limit, not a Nubia result.
 
 ## Open review gates
 
@@ -46,7 +50,7 @@ Run with the external display connected and the phone unlocked. Record the
 Omalateral APK commit, Omalauncher build/commit, Android version, display mode,
 and Shizuku/helper state with each result. Preserve logs and captures on failure.
 
-1. Install the stacked Omalateral APK and bridge-enabled Omalauncher. Confirm
+1. Install the consolidated Omalateral APK and bridge-enabled Omalauncher. Confirm
    automatic detection and the PhoneUI consent flow; deny once and confirm the
    embedded fallback, then allow and reconnect.
 2. Verify all three populated home screens appear side by side with the selected
@@ -60,8 +64,9 @@ and Shizuku/helper state with each result. Preserve logs and captures on failure
    content is included and protected pixels are absent.
 5. Resize, hide/restore, and reconnect a protected tile. Test direct touch and
    PhoneUI-routed touch after each change, plus key input, chrome controls, and
-   helper shutdown cleanup. The emulator's post-resize touch failure needs a
-   code fix before this is an acceptance check.
+   helper shutdown cleanup. Protected sources retain their app dimensions during
+   tile resize; verify that their display resolution catches up after protection
+   clears.
 6. Launch personal and work-profile apps from PhoneUI. Record whether each is
    managed as a desktop tile; work-profile launch currently bypasses the managed
    tile path, so this is a tracked limitation rather than a passing criterion.

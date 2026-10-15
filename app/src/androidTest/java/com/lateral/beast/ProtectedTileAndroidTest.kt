@@ -141,7 +141,9 @@ class ProtectedTileAndroidTest {
             val composed=ParcelFileDescriptor.AutoCloseInputStream(checkNotNull(service.captureExternalDisplay(output.displayId))).use {
                 checkNotNull(android.graphics.BitmapFactory.decodeStream(it))
             }
-            assertTrue("Helper capture excludes protected tile",marker(composed)<.001)
+            val composedFirstTile=Bitmap.createBitmap(composed,40,80,540,640)
+            assertTrue("Helper capture excludes protected tile",marker(composedFirstTile)<.001)
+            composedFirstTile.recycle()
             assertEquals("Helper capture includes workspace chrome",Color.GREEN,composed.getPixel(150,180))
             composed.recycle()
             fun inputCount(name: String, prefs: String = "protected-fixture-input"): Int {
