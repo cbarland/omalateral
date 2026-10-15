@@ -1,4 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries>
+        <package android:name="dev.omalauncher.bridgepreview" />
+    </queries>
     <application>
         <activity android:name="com.lateral.beast.ProtectedTileFixtureActivity"
             android:exported="false" android:resizeableActivity="true"

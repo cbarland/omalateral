@@ -315,7 +315,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         updateExternalDisplay()
         // A Beast that was already plugged in before the PhoneUI launched will not
         // generate onDisplayAdded(), so explicitly enter its selector here as well.
-        if (externalDisplay != null && intent?.action != ACTION_BEAST_LAUNCHER_SEARCH) {
+        if (externalDisplay != null && intent?.action !in listOf(ACTION_BEAST_LAUNCHER_SEARCH, com.lateral.beast.ExternalDesktopConsent.ACTION)) {
             ensureExternalWorkspace(
                 workspaceAction = BeastActivity.ACTION_ENSURE_WORKSPACE,
             )
@@ -328,6 +328,15 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         if (intent?.action == ACTION_BEAST_LAUNCHER_SEARCH) {
             window.decorView.post(::showBeastLauncherSearchOnPhone)
         }
+        if (intent?.action == com.lateral.beast.ExternalDesktopConsent.ACTION) {
+            window.decorView.post { com.lateral.beast.ExternalDesktopConsent.show(this) }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        com.lateral.beast.ExternalDesktopConsent.finish(requestCode, resultCode)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -335,7 +344,9 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         setIntent(intent)
         if (accessoryController?.handleIntent(intent) == true) return
         window.decorView.post {
-            if (intent.action == ACTION_PHONE_FOCUS_REPAIR) {
+            if (intent.action == com.lateral.beast.ExternalDesktopConsent.ACTION) {
+                com.lateral.beast.ExternalDesktopConsent.show(this)
+            } else if (intent.action == ACTION_PHONE_FOCUS_REPAIR) {
                 // Re-fronting PhoneUI is the end of a Beast task transaction. Do not
                 // ensure Beast again here or the two displays can steal focus in a loop.
                 leasePhoneWindowFocusForTaskTransaction()

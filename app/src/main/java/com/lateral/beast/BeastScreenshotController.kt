@@ -3,23 +3,28 @@ package com.lateral.beast
 import android.app.Activity
 import android.content.ContentValues
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.view.PixelCopy
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Captures LATERAL-owned BeastUI content and publishes it as a PNG. */
+/** Captures the composed external display or a focused, non-protected hosted app. */
 internal class BeastScreenshotController(
     private val activity: Activity,
     private val focusedAppBitmap: () -> Bitmap?,
+    private val sharedDesktopConnected: () -> Boolean,
+    private val composedDisplayCapture: (Int, (ParcelFileDescriptor?) -> Unit) -> Unit,
     private val onResult: (Result) -> Unit,
 ) : AutoCloseable {
     enum class ScreenshotTarget {
@@ -58,6 +63,42 @@ internal class BeastScreenshotController(
     }
 
     private fun requestFullDisplay() {
+        val displayId = activity.display?.displayId ?: -1
+        if (displayId >= 0) {
+            composedDisplayCapture(displayId) { descriptor ->
+                if (descriptor != null) {
+                    try {
+                        captureExecutor.execute {
+                            val result = try {
+                                val bitmap = ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
+                                    BitmapFactory.decodeStream(input) ?: throw IOException("Display capture was empty")
+                                }
+                                try { saveBitmap(ScreenshotTarget.FULL_DISPLAY, bitmap) }
+                                finally { bitmap.recycle() }
+                            } catch (error: Exception) {
+                                Result.Failed(ScreenshotTarget.FULL_DISPLAY, error.message ?: "Display capture failed")
+                            } catch (error: OutOfMemoryError) {
+                                Result.Failed(ScreenshotTarget.FULL_DISPLAY, "Not enough memory for capture")
+                            }
+                            finish(result)
+                        }
+                    } catch (_: RejectedExecutionException) {
+                        descriptor.close()
+                        captureInFlight.set(false)
+                    }
+                } else if (sharedDesktopConnected()) {
+                    finish(Result.Failed(ScreenshotTarget.FULL_DISPLAY, "Full display capture is unavailable"))
+                } else {
+                    requestOwnedWindow()
+                }
+            }
+            return
+        }
+        requestOwnedWindow()
+    }
+
+    /** Local Compose desktop fallback; a remote child surface must use the composed capture. */
+    private fun requestOwnedWindow() {
         val decor = activity.window.decorView
         val width = decor.width
         val height = decor.height

@@ -150,11 +150,19 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private var presenceReceiverRegistered = false
     private val presenceReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.data?.schemeSpecificPart == OmalauncherPresence.PACKAGE) refreshOmalauncherPresence()
+            if (intent?.data?.schemeSpecificPart in ExternalOmaDesktop.PACKAGES) refreshOmalauncherPresence()
         }
     }
 
     private fun refreshOmalauncherPresence() {
+        val external = omaDesktop as? ExternalOmaDesktop
+        val available = ExternalOmaDesktop.available(this)
+        if (::root.isInitialized && !phoneViewSession && !(com.lateral.BuildConfig.DEBUG && intent.getBooleanExtra("embeddedDesktop", false)) &&
+            (external?.candidatePackages ?: emptyList()).toSet() != available.toSet()) {
+            rebuildUiForElementScale()
+            return
+        }
+        external?.refresh()
         val next = OmalauncherPresence.detect(this)
         if (next == omalauncherPresence) return
         omalauncherPresence = next
@@ -162,6 +170,11 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun showCompanionStatus() {
+        (omaDesktop as? ExternalOmaDesktop)?.let {
+            android.widget.Toast.makeText(this, it.status, android.widget.Toast.LENGTH_LONG).show()
+            if (!it.connected) it.requestConnection()
+            return
+        }
         val message = if (sharedDesktop) "Connected to an authorized external Omalauncher desktop session." else when (omalauncherPresence) {
             OmalauncherPresence.ABSENT -> "Using omalateral's embedded Omalauncher desktop. Its widgets, settings and optional Linux installation are local to omalateral."
             OmalauncherPresence.DISABLED -> "Standalone Omalauncher is disabled. Using omalateral's separate embedded desktop."
@@ -215,6 +228,10 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             activity = this,
             focusedAppBitmap = {
                 cards[WorkspaceState.focusedTaskId]?.captureBitmap()
+            },
+            sharedDesktopConnected = { (omaDesktop as? ExternalOmaDesktop)?.connected == true },
+            composedDisplayCapture = { displayId, callback ->
+                PrivilegedService.captureExternalDisplayAsync(displayId, callback)
             },
             onResult = ::onScreenshotResult,
         )
@@ -742,6 +759,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             root.getLocationOnScreen(rootLocation)
             val screenX = rootLocation[0] + state.xFraction * root.width
             val screenY = rootLocation[1] + state.yFraction * root.height
+            if (desktopAt(screenX.toInt(), screenY.toInt())) omaDesktop?.hover(screenX.toInt(), screenY.toInt())
             val modalRoot = modalCursorOverlays.keys.lastOrNull { it.isShowing }?.window?.decorView
             findBeastHoverTarget(modalRoot ?: root, screenX.toInt(), screenY.toInt())
         } else {
@@ -1103,9 +1121,13 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
                 setLauncherActive(panelOpen || LauncherSearchSession.active)
             }
         }
-        val session = embedded()
+        val external = if (phoneViewSession || (com.lateral.BuildConfig.DEBUG && intent.getBooleanExtra("embeddedDesktop", false))) null
+            else ExternalOmaDesktop.create(this, embedded, ::hideLauncher,
+                { panelOpen -> setLauncherActive(panelOpen || LauncherSearchSession.active) },
+                { connected -> sharedDesktop = connected; renderToolbar(); keepCursorOnTop() })
+        val session = external ?: embedded()
         omaDesktop = session
-        sharedDesktop = false
+        sharedDesktop = external?.connected == true
         launcher = FrameLayout(this).apply {
             setBackgroundColor(Color.TRANSPARENT)
             addView(session.view, FrameLayout.LayoutParams(-1, -1))

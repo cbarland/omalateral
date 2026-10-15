@@ -10,11 +10,13 @@ internal enum class OmalauncherPresence {
     companion object {
         const val PACKAGE = "dev.omalauncher"
 
-        fun detect(context: Context): OmalauncherPresence = classify(try {
-            context.packageManager.getApplicationInfo(PACKAGE, 0).enabled
-        } catch (_: PackageManager.NameNotFoundException) {
-            null
-        })
+        fun detect(context: Context): OmalauncherPresence {
+            val installed = ExternalOmaDesktop.PACKAGES.mapNotNull { name ->
+                try { context.packageManager.getApplicationInfo(name, 0).enabled }
+                catch (_: PackageManager.NameNotFoundException) { null }
+            }
+            return classify(if (installed.isEmpty()) null else installed.any { it })
+        }
 
         internal fun classify(enabled: Boolean?): OmalauncherPresence = when (enabled) {
             null -> ABSENT

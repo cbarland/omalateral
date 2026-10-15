@@ -18,6 +18,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.Process
 import android.os.Parcel
+import android.os.ParcelFileDescriptor
 import androidx.annotation.Keep
 import android.os.RemoteException
 import android.os.SystemClock
@@ -71,6 +72,45 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
     /** Trusted virtual displays created for the workspace, keyed by display id. */
     private val virtualDisplays = java.util.concurrent.ConcurrentHashMap<Int, VirtualDisplay>()
     private val protectedOutputs = HashMap<IBinder, ProtectedDisplayOutput>()
+
+    private fun captureProcess(vararg command: String): java.lang.Process = ProcessBuilder(*command).start().also { process ->
+        Thread({
+            if (!process.waitFor(8, java.util.concurrent.TimeUnit.SECONDS)) {
+                Log.w(TAG, "Display capture command timed out: ${command.firstOrNull()}")
+                process.destroyForcibly()
+            }
+        }, "lateral-capture-timeout").apply { isDaemon = true }.start()
+    }
+
+    override fun captureExternalDisplay(displayId: Int): ParcelFileDescriptor? {
+        val caller = Binder.getCallingUid()
+        val appUid = runCatching { baseContext()?.packageManager?.getApplicationInfo(PHONE_UI_PACKAGE, 0)?.uid }.getOrNull()
+        if (destroying.get() || appUid == null || caller != appUid || displayId == Display.DEFAULT_DISPLAY ||
+            virtualDisplays.containsKey(displayId) || displayManager()?.getDisplay(displayId) == null) return null
+
+        val dump = runCatching {
+            captureProcess("dumpsys", "SurfaceFlinger").let { process ->
+                val output = process.inputStream.bufferedReader().use { it.readText() }
+                if (process.waitFor() == 0) output else ""
+            }
+        }.getOrDefault("")
+        val physicalId = PhysicalDisplayCaptureTarget.forLayerStack(dump, displayId) ?: return null
+        val pipe = ParcelFileDescriptor.createPipe()
+        Thread({
+            ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]).use { output ->
+                runCatching {
+                    val process = captureProcess("screencap", "-p", "-d", physicalId)
+                    try {
+                        process.inputStream.use { it.copyTo(output) }
+                        if (process.waitFor() != 0) Log.w(TAG, "External display screencap failed")
+                    } finally {
+                        process.destroy()
+                    }
+                }.onFailure { Log.w(TAG, "External display capture failed", it) }
+            }
+        }, "lateral-display-capture").apply { isDaemon = true }.start()
+        return pipe[0]
+    }
 
     override fun openProtectedOutput(outputDisplayId: Int, sourceDisplayId: Int, parent: SurfaceControl,
         hostWindow: SurfaceControl, owner: IBinder,

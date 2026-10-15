@@ -136,6 +136,14 @@ class ProtectedTileAndroidTest {
             firstTile.recycle()
             assertEquals("Chrome above native tile remains visible",Color.GREEN,image.getPixel(150,180))
             image.recycle()
+            assertNull("Phone screen cannot be captured through the external helper",service.captureExternalDisplay(0))
+            assertNull("Owned app displays cannot be captured through the external helper",service.captureExternalDisplay(source))
+            val composed=ParcelFileDescriptor.AutoCloseInputStream(checkNotNull(service.captureExternalDisplay(output.displayId))).use {
+                checkNotNull(android.graphics.BitmapFactory.decodeStream(it))
+            }
+            assertTrue("Helper capture excludes protected tile",marker(composed)<.001)
+            assertEquals("Helper capture includes workspace chrome",Color.GREEN,composed.getPixel(150,180))
+            composed.recycle()
             fun inputCount(name: String, prefs: String = "protected-fixture-input"): Int {
                 val text=shell("run-as ${instrumentation.context.packageName} cat shared_prefs/$prefs.xml")
                 return Regex("name=\"$name\" value=\"(\\d+)\"").find(text)?.groupValues?.get(1)?.toInt() ?: 0

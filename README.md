@@ -16,13 +16,14 @@ Widgets, themes, settings and any optional Linux installation belong to
 `com.omalateral`; an existing standalone Omalauncher installation is unchanged.
 Starting the desktop does not automatically install a Linux distribution.
 
-Bridge preparation includes standalone Omalauncher detection on startup/resume
-and package changes, a desktop-session interface, and lazy provider selection
-that can prefer an authorized external session without starting a local runtime.
-The external adapter is deliberately unavailable until a protocol is agreed and
-implemented in both apps. **This alpha does not connect to stock Omalauncher or
-share its data.** With no bridge, it always uses its own embedded desktop.
-See the [upstream proposal](https://github.com/SimonSchubert/omalauncher/issues/34).
+Development builds discover a compatible bridge-enabled Omalauncher and request
+PhoneUI consent before hosting its live home, widgets, and selected theme.
+Omalateral supplies the cursor and forwards PhoneUI pointer input; the embedded
+home remains the fallback when no provider is available or consent is declined.
+The [bridge validation notes](docs/BRIDGE_VALIDATION.md) cover emulator results,
+known limitations, and queued physical-device checks. Stock Omalauncher releases
+without the proposed bridge still keep their data separate. See the
+[upstream proposal](https://github.com/SimonSchubert/omalauncher/issues/34).
 
 [Screenshots](#screenshots) · [Getting started](#getting-started) ·
 [How to use](#how-to-use) · [Limitations](#current-limitations) ·

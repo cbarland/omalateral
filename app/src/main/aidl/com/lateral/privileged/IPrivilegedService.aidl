@@ -7,6 +7,7 @@ import android.view.Surface;
 import android.view.SurfaceControl;
 import com.lateral.privileged.IProtectedDisplayListener;
 import android.os.IBinder;
+import android.os.ParcelFileDescriptor;
 import com.lateral.privileged.IPrivilegedHotkeyListener;
 
 interface IPrivilegedService {
@@ -201,4 +202,6 @@ interface IPrivilegedService {
     oneway void updateProtectedOutput(IBinder owner, long sequence, int width, int height,
         int eyeCount, in int[] sources, in int[] eyes, in float[] slices) = 53;
     oneway void closeProtectedOutput(IBinder owner) = 54;
+    /** PNG of the composed secondary output, with Android's secure layers excluded. */
+    ParcelFileDescriptor captureExternalDisplay(int displayId) = 55;
 }

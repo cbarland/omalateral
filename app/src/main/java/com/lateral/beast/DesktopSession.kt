@@ -3,7 +3,7 @@ package com.lateral.beast
 import android.view.KeyEvent
 import android.view.View
 
-/** Host-facing session boundary shared by the embedded desktop and a future bridge adapter. */
+/** Home surface and input actions shared by the embedded and external desktops. */
 interface DesktopSession {
     val view: View
     fun visible(visible: Boolean)
@@ -12,30 +12,9 @@ interface DesktopSession {
     fun themes()
     fun dismissPanels()
     fun key(event: KeyEvent): Boolean
+    fun hover(x: Int, y: Int) = Unit
     fun popupClick(x: Int, y: Int, button: Int): Boolean = false
     fun popupPointer(x: Int, y: Int, action: Int, button: Int): Boolean = false
     fun popupScroll(x: Int, y: Int, amount: Float): Boolean = false
     fun close()
-}
-
-/** Returns only an authorized, usable session; unavailable/unsupported providers return null. */
-internal fun interface ExternalDesktopConnector {
-    fun connect(): DesktopSession?
-}
-
-/** No wire protocol has been agreed upstream. Never equate package presence with a connection. */
-internal object PendingExternalDesktopBridge : ExternalDesktopConnector {
-    override fun connect(): DesktopSession? = null
-}
-
-internal data class DesktopConnection(val session: DesktopSession, val shared: Boolean)
-
-/** Keep embedded initialization lazy so a future connected provider does not start two runtimes. */
-internal fun openDesktopSession(
-    connector: ExternalDesktopConnector,
-    embedded: () -> DesktopSession,
-): DesktopConnection {
-    val external = connector.connect()
-    return if (external != null) DesktopConnection(external, shared = true)
-    else DesktopConnection(embedded(), shared = false)
 }

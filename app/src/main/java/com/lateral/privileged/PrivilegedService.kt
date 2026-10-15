@@ -7,6 +7,7 @@ import android.os.DeadObjectException
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.view.KeyEvent
 import android.view.Surface
@@ -19,6 +20,17 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** Shared privileged operations and validated ownership for ADB, USB, and Shizuku. */
 object PrivilegedService {
+
+    fun captureExternalDisplayAsync(displayId: Int, callback: (ParcelFileDescriptor?) -> Unit) {
+        val expected = currentSession
+        screenshotWorker.execute {
+            val result = invoke(expected, null) { it.captureExternalDisplay(displayId) }
+            mainHandler.post {
+                if (sessions.matches(expected) && state == State.READY) callback(result)
+                else { result?.close(); callback(null) }
+            }
+        }
+    }
 
     enum class ImeRoutingState { CHECKING, AVAILABLE, UNAVAILABLE }
 
@@ -184,6 +196,7 @@ object PrivilegedService {
     private val control = Executors.newSingleThreadExecutor { Thread(it, "lateral-helper-control") }
     private val initializer = Executors.newCachedThreadPool { Thread(it, "lateral-helper-init").apply { isDaemon = true } }
     private val worker = Executors.newSingleThreadExecutor { Thread(it, "lateral-privileged") }
+    private val screenshotWorker = Executors.newSingleThreadExecutor { Thread(it, "lateral-display-capture") }
     private val protectedWorker = Executors.newSingleThreadExecutor { Thread(it, "lateral-protected-submit") }
     private val protectedPending = java.util.concurrent.ConcurrentHashMap<IBinder, () -> Unit>()
     private val protectedScheduled = AtomicBoolean(false)
