@@ -1834,7 +1834,10 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             }
             add(WorkspaceCommand("SHOW ALL", "Restore windows in their existing order", WorkspaceState.tasks.isNotEmpty()) { showAllTasks() })
             add(WorkspaceCommand("MINIMIZE ALL", "Reveal your home without closing apps", WorkspaceState.tasks.isNotEmpty(), run = ::showOmaDesktop))
-            add(WorkspaceCommand("CAPTURE", "Save the external workspace · protected content excluded", run = ::captureFullDisplay))
+            add(WorkspaceCommand("CAPTURE", "Save the external workspace · protected content excluded") {
+                // The dialog fades out after dismiss(); capture the next settled desktop.
+                root.postDelayed({ if (!isFinishing && !isDestroyed) captureFullDisplay() }, 350L)
+            })
             add(WorkspaceCommand("DISPLAY", "Resolution, scale and external display mode", run = ::showExternalDisplaySettings))
             add(WorkspaceCommand("SETTINGS", "Input, shortcuts and personalization", run = ::showInputSettings))
             add(WorkspaceCommand(if (sharedDesktop) "OMA: SHARED" else "OMA: LOCAL", "Omalauncher connection details", run = ::showCompanionStatus))
