@@ -149,6 +149,51 @@ class ExternalOmaDesktopAndroidTest {
         try { block(this) } finally { recycle() }
     }
 
+    @Test fun previewProviderOpensAndDismissesStockHomeMenu() {
+        val context = instrumentation.targetContext
+        assertTrue("Install the bridge provider fixture", "dev.omalauncher.bridgepreview" in ExternalOmaDesktop.available(context))
+        instrumentation.uiAutomation.adoptShellPermissionIdentity()
+        val images = ImageReader.newInstance(1280, 720, PixelFormat.RGBA_8888, 2)
+        val display = context.getSystemService(DisplayManager::class.java).createVirtualDisplay(
+            "Omalauncher home menu acceptance", 1280, 720, 160, images.surface,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION or DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY or
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or (1 shl 10),
+        )
+        try {
+            val options = ActivityOptions.makeBasic().apply { launchDisplayId = display.display.displayId }
+            ActivityScenario.launch<BeastActivity>(Intent(context, BeastActivity::class.java)
+                .putExtra("desktopProvider", "dev.omalauncher.bridgepreview")
+                .putExtra("desktopProfile", "menu_" + java.util.UUID.randomUUID().toString().take(20))
+                .setAction(BeastActivity.ACTION_ENSURE_WORKSPACE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), options.toBundle()).use { scenario ->
+                lateinit var activity: BeastActivity
+                scenario.onActivity { activity = it }
+                if (InstrumentationRegistry.getArguments().getString("allowConsent") == "true") {
+                    val deadline = android.os.SystemClock.uptimeMillis() + 10_000
+                    while (android.os.SystemClock.uptimeMillis() < deadline) {
+                        var connected = false
+                        ui { connected = (field(activity, "omaDesktop") as? ExternalOmaDesktop)?.connected == true }
+                        if (connected) break
+                        allowNode(instrumentation.uiAutomation.rootInActiveWindow)?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                        Thread.sleep(100)
+                    }
+                }
+                lateinit var desktop: ExternalOmaDesktop
+                await("automatic provider connection") {
+                    val candidate = field(activity, "omaDesktop") as? ExternalOmaDesktop
+                    if (candidate?.connected == true) { desktop = candidate; true } else false
+                }
+                ui { assertTrue("The preview provider exposes its stock home menu", desktop.homeMenu()) }
+                await("home-menu action opens the provider menu") { desktop.details.getBoolean("homeMenuOpen") }
+                ui { desktop.dismissPanels() }
+                await("dismiss closes the provider home menu") { !desktop.details.getBoolean("homeMenuOpen") }
+            }
+        } finally {
+            display.release()
+            images.close()
+            instrumentation.uiAutomation.dropShellPermissionIdentity()
+        }
+    }
+
     @Test fun previewProviderShowsInheritedPagesAndPhonePointerControlsTheLiveSurface() {
         val context = instrumentation.targetContext
         assertTrue("Install the bridge provider fixture", ExternalOmaDesktop.available(context).isNotEmpty())

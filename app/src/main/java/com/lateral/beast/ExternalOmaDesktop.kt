@@ -100,6 +100,7 @@ internal class ExternalOmaDesktop private constructor(
     private var surface: SurfaceView? = null
     private var local: DesktopSession? = null
     private var overlay = false
+    private var supportsHomeMenu = false
     var sessionId: String? = null
         private set
     var details = Bundle()
@@ -209,6 +210,7 @@ internal class ExternalOmaDesktop private constructor(
         if (bound) runCatching { activity.unbindService(connection) }
         bound = false
         bridge = null
+        supportsHomeMenu = false
     }
 
     private fun nextProvider() {
@@ -239,6 +241,7 @@ internal class ExternalOmaDesktop private constructor(
                             if (!capabilities.containsAll(listOf("home_surface", "pointer", "home_pages", "appearance"))) {
                                 nextProvider(); return@post
                             }
+                            supportsHomeMenu = "home_menu" in capabilities
                             when (negotiated.getString("status")) {
                                 "ready" -> mountSurface()
                                 "consent_required" -> {
@@ -489,7 +492,12 @@ internal class ExternalOmaDesktop private constructor(
     override fun search(query: String, submit: Boolean) { if (local != null) local!!.search(query, submit) else sendRemote { search(query, submit) } }
     override fun apps() { if (local != null) local!!.apps() else sendRemote { action("drawer") } }
     override fun widgets() { if (local != null) local!!.widgets() else sendRemote { action("widgets") } }
-    override fun homeMenu(): Boolean = local?.homeMenu() ?: false
+    override fun homeMenu(): Boolean {
+        local?.let { return it.homeMenu() }
+        if (remote == null || !supportsHomeMenu) return false
+        sendRemote { action("home_menu") }
+        return true
+    }
     override fun themes() { if (local != null) local!!.themes() else report("Choose a theme in Omalauncher on the phone; the workspace follows it automatically") }
     override fun dismissPanels() { local?.dismissPanels(); sendRemote { action("dismiss") }; onOverlay(false) }
     override fun key(event: KeyEvent): Boolean {
