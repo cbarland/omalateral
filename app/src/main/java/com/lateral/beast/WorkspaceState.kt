@@ -46,7 +46,6 @@ data class BeastTask(
     var group: Long? = null,
     var maximized: Boolean = false,
     var pseudo: Boolean = false,
-    var columnScale: Float = 1f,
 ) {
     var minimized: Boolean
         get() = placement != TaskPlacement.BEAST_VISIBLE
@@ -62,17 +61,15 @@ data class BeastTask(
 object WorkspaceState {
     private val pendingIds = AtomicLong(-1L)
     private val listeners = CopyOnWriteArraySet<() -> Unit>()
-    private val viewportListeners = CopyOnWriteArraySet<(Float) -> Unit>()
     private val mutableTasks = mutableListOf<BeastTask>()
     private val missingCounts = mutableMapOf<Int, Int>()
     private var interactionSequence = 0L
     private var displayModeRestoreTaskId: Long? = null
     private var displayModeRestoreExpiresAt = 0L
     private var displayModeExpectedUltrawide: Boolean? = null
-    private var revealFocusedTaskRequested = false
     private var prefs: android.content.SharedPreferences? = null
     private var restored = emptyMap<Int, Persisted>()
-    private val workspaceLayouts = mutableMapOf<Int, WorkspaceLayout>()
+    private val lastFreeformSizes = mutableMapOf<String, Pair<Float, Float>>()
     private val dwindleLayouts = mutableMapOf<Int, DwindleLayout>()
     private val workspaceFocus = mutableMapOf<Int, Long?>()
     var activeWorkspace = 1
@@ -94,30 +91,15 @@ object WorkspaceState {
         return candidates.filter { it.group == null || selected[it.group]?.id == it.id }
     }
 
-    fun layout(workspace: Int = activeWorkspace) = workspaceLayouts[workspace] ?: WorkspaceLayout.SCROLLING
-
     private fun dwindle() = dwindleLayouts.getOrPut(activeWorkspace) { DwindleLayout(prefs?.getString("dwindle_$activeWorkspace", null)) }
 
     internal fun windowBounds(width: Int, height: Int, outer: Int, gap: Int): Map<Long, WindowBounds> {
         val visible = visibleTasks()
         val tiled = visible.filter { !it.floating && !it.pinned && it.workspace != 0 }
-        val result = if (layout() == WorkspaceLayout.DWINDLE) {
-            dwindle().sync(tiled.map { it.group ?: it.id }, tasks.firstOrNull { it.id == focusedTaskId }?.let { it.group ?: it.id },
-                width, height, tiled.associate { (it.group ?: it.id) to it.splitAnchor })
-            val cells = dwindle().bounds(width, height, outer, gap)
-            tiled.mapNotNull { task -> cells[task.group ?: task.id]?.let { task.id to it } }.toMap().toMutableMap()
-        } else {
-            val column = ((width - 2 * outer) * .49f).toInt().coerceAtLeast(1)
-            var x = outer
-            val availableHeight = (height - 2 * outer).coerceAtLeast(1)
-            tiled.associate { task ->
-                val preferredWidth = if (task.mode == PresentationMode.PHONE) minOf(column, (availableHeight * 9f / 16f).toInt().coerceAtLeast(1)) else column
-                val tileWidth = (preferredWidth * task.columnScale).toInt().coerceIn(1, (width - 2 * outer).coerceAtLeast(1))
-                val box = WindowBounds(x, outer, tileWidth, availableHeight)
-                x += tileWidth + gap
-                task.id to box
-            }.toMutableMap()
-        }
+        dwindle().sync(tiled.map { it.group ?: it.id }, tasks.firstOrNull { it.id == focusedTaskId }?.let { it.group ?: it.id },
+            width, height, tiled.associate { (it.group ?: it.id) to it.splitAnchor })
+        val cells = dwindle().bounds(width, height, outer, gap)
+        val result = tiled.mapNotNull { task -> cells[task.group ?: task.id]?.let { task.id to it } }.toMap().toMutableMap()
         visible.filter { it.floating || it.pinned || it.workspace == 0 }.forEach { task ->
             val w = (width * task.floatingWidth).toInt().coerceIn(1, width.coerceAtLeast(1))
             val h = (height * task.floatingHeight).toInt().coerceIn(1, height.coerceAtLeast(1))
@@ -145,8 +127,6 @@ object WorkspaceState {
         scratchpadVisible = false
         focusedTaskId = workspaceFocus[workspace]?.takeIf { id -> visibleTasks().any { it.id == id } }
             ?: visibleTasks().lastOrNull()?.id
-        viewportPosition = 0f
-        revealFocusedTaskRequested = true
         notifyChanged()
     }
 
@@ -157,12 +137,6 @@ object WorkspaceState {
         members.forEach { it.workspace = workspace; it.pinned = false; if (workspace == 0) it.floating = true }
         if (follow && workspace != 0) switchWorkspace(workspace)
         focusedTaskId = if (follow && workspace != 0) id else visibleTasks().lastOrNull()?.id
-        notifyChanged()
-    }
-
-    fun toggleLayout() {
-        workspaceLayouts[activeWorkspace] = if (layout() == WorkspaceLayout.DWINDLE) WorkspaceLayout.SCROLLING else WorkspaceLayout.DWINDLE
-        viewportPosition = 0f
         notifyChanged()
     }
 
@@ -189,11 +163,11 @@ object WorkspaceState {
         val target = directionalWindow(bounds, focusedTaskId, direction) ?: return false
         val current = focusedTaskId
         if (swap && current != null) {
-            if (layout() == WorkspaceLayout.DWINDLE) dwindle().swap(tasks.first { it.id == current }.let { it.group ?: it.id }, tasks.first { it.id == target }.let { it.group ?: it.id })
+            dwindle().swap(tasks.first { it.id == current }.let { it.group ?: it.id }, tasks.first { it.id == target }.let { it.group ?: it.id })
             val from = mutableTasks.indexOfFirst { it.id == current }; val to = mutableTasks.indexOfFirst { it.id == target }
             if (from >= 0 && to >= 0) { val item = mutableTasks[from]; mutableTasks[from] = mutableTasks[to]; mutableTasks[to] = item }
             notifyChanged()
-        } else focus(target, reveal = true)
+        } else focus(target)
         return true
     }
 
@@ -206,12 +180,6 @@ object WorkspaceState {
                 if (horizontal) task.floatingWidth + delta else task.floatingWidth,
                 if (horizontal) task.floatingHeight else task.floatingHeight, persist)
             return
-        } else if (layout() == WorkspaceLayout.SCROLLING) {
-            if (horizontal) {
-                val members = if (task.group == null) listOf(task) else tasks.filter { it.group == task.group }
-                val next = (task.columnScale + delta * 2f).coerceIn(.5f, 2f)
-                members.forEach { it.columnScale = next }
-            }
         } else dwindle().resize(task.group ?: task.id, horizontal, delta)
         notifyChanged(persist)
     }
@@ -223,16 +191,23 @@ object WorkspaceState {
 
     fun floatingBounds(id: Long, x: Float, y: Float, width: Float, height: Float, persist: Boolean = true) {
         val task = mutableTasks.firstOrNull { it.id == id } ?: return
+        val sizeChanged = task.floatingWidth != width.coerceIn(.15f, 1f) ||
+            task.floatingHeight != height.coerceIn(.15f, 1f)
         val members = if (task.group == null) listOf(task) else tasks.filter { it.group == task.group }
         members.forEach {
             it.floating = true; it.maximized = false
             it.floatingWidth = width.coerceIn(.15f, 1f); it.floatingHeight = height.coerceIn(.15f, 1f)
             it.floatingX = x.coerceIn(0f, 1f - it.floatingWidth); it.floatingY = y.coerceIn(0f, 1f - it.floatingHeight)
         }
+        if (persist && sizeChanged) rememberFreeformSize(task)
         notifyChanged(persist)
     }
 
-    internal fun savedTileLayout(): String? = if (layout() == WorkspaceLayout.DWINDLE) dwindle().save() else null
+    private fun rememberFreeformSize(task: BeastTask) {
+        lastFreeformSizes[task.packageName] = task.floatingWidth to task.floatingHeight
+    }
+
+    internal fun savedTileLayout(): String = dwindle().save()
 
     internal fun finishTileDrag(id: Long, target: Long?, saved: String?) {
         val task = tasks.firstOrNull { it.id == id } ?: return
@@ -240,11 +215,7 @@ object WorkspaceState {
         if (saved != null) dwindleLayouts[activeWorkspace] = DwindleLayout(saved)
         val other = tasks.firstOrNull { it.id == target && it.id != id }
         if (other != null) {
-            if (layout() == WorkspaceLayout.DWINDLE) dwindle().swap(task.group ?: task.id, other.group ?: other.id)
-            else {
-                val from = mutableTasks.indexOf(task); val to = mutableTasks.indexOf(other)
-                mutableTasks[from] = other; mutableTasks[to] = task
-            }
+            dwindle().swap(task.group ?: task.id, other.group ?: other.id)
         }
         notifyChanged()
     }
@@ -267,7 +238,7 @@ object WorkspaceState {
         if (members.isEmpty()) return
         val target = index?.minus(1)?.takeIf { it in members.indices }
             ?: ((members.indexOfFirst { it.id == current.id } + delta + members.size) % members.size)
-        focus(members[target].id, reveal = true)
+        focus(members[target].id)
     }
 
     internal fun joinDirectionalGroup(direction: WindowDirection, bounds: Map<Long, WindowBounds>) {
@@ -284,39 +255,18 @@ object WorkspaceState {
     val tasks: List<BeastTask> get() = mutableTasks.toList()
     var focusedTaskId: Long? = null
         private set
-    var viewportPosition: Float = 0f
-        private set
 
     fun init(context: Context) {
         if (prefs != null) return
         prefs = context.getSharedPreferences("workspace_tasks", Context.MODE_PRIVATE)
         restored = readPersisted()
+        lastFreeformSizes.putAll(readFreeformSizes())
         activeWorkspace = prefs?.getInt("active_workspace", 1)?.coerceIn(1, 10) ?: 1
-        for (workspace in 1..10) workspaceLayouts[workspace] = runCatching {
-            WorkspaceLayout.valueOf(prefs?.getString("layout_$workspace", "SCROLLING") ?: "SCROLLING")
-        }.getOrDefault(WorkspaceLayout.SCROLLING)
         pendingIds.set(minOf(-1L, (restored.values.flatMap { listOfNotNull(it.desktopId, it.group) }.minOrNull() ?: 0L) - 1L))
     }
 
     fun addListener(listener: () -> Unit) { listeners += listener }
     fun removeListener(listener: () -> Unit) { listeners -= listener }
-    fun addViewportListener(listener: (Float) -> Unit) { viewportListeners += listener }
-    fun removeViewportListener(listener: (Float) -> Unit) { viewportListeners -= listener }
-
-    fun setViewportPosition(position: Float) {
-        val next = position.coerceIn(0f, 1f)
-        if (kotlin.math.abs(next - viewportPosition) < .001f) return
-        viewportPosition = next
-        viewportListeners.forEach { it(next) }
-    }
-
-    /** Consumes a one-shot reveal request from an explicit app/taskbar interaction. */
-    fun consumeRevealFocusedTaskRequest(): Boolean {
-        val requested = revealFocusedTaskRequested
-        revealFocusedTaskRequested = false
-        return requested
-    }
-
     fun beginDisplayModeSwitch(ultrawide: Boolean) {
         displayModeRestoreTaskId = focusedTaskId
         displayModeExpectedUltrawide = ultrawide
@@ -379,6 +329,7 @@ object WorkspaceState {
                 } else {
                     val saved = restored[snapshot.taskId]
                         ?.takeIf { it.packageName == snapshot.packageName }
+                    val freeformSize = lastFreeformSizes[snapshot.packageName]
                     val placement = saved?.placement ?: when {
                         initial && !initialImportMinimized -> TaskPlacement.BEAST_VISIBLE
                         else -> TaskPlacement.PHONE
@@ -400,8 +351,8 @@ object WorkspaceState {
                         floating = saved?.floating ?: false,
                         pinned = saved?.pinned ?: false,
                         floatingX = saved?.x ?: .2f, floatingY = saved?.y ?: .15f,
-                        floatingWidth = saved?.width ?: .6f, floatingHeight = saved?.height ?: .7f,
-                        columnScale = saved?.columnScale ?: 1f,
+                        floatingWidth = saved?.width ?: freeformSize?.first ?: .6f,
+                        floatingHeight = saved?.height ?: freeformSize?.second ?: .7f,
                         group = saved?.group, maximized = saved?.maximized ?: false, pseudo = saved?.pseudo ?: false,
                     )
                     val restoredOrder = saved?.beastOrder
@@ -469,6 +420,7 @@ object WorkspaceState {
     }
 
     fun launchNew(packageName: String, activityName: String, label: String): BeastTask {
+        val freeformSize = lastFreeformSizes[packageName]
         val task = BeastTask(
             id = pendingIds.getAndDecrement(), packageName = packageName,
             activityName = activityName, label = label, shortLabel = shortLabel(label),
@@ -476,6 +428,8 @@ object WorkspaceState {
             lastInteractionSequence = nextInteractionSequence(),
             workspace = activeWorkspace,
             mode = PresentationMode.TABLET,
+            floatingWidth = freeformSize?.first ?: .6f,
+            floatingHeight = freeformSize?.second ?: .7f,
             splitAnchor = focusedTaskId,
             group = tasks.firstOrNull { it.id == focusedTaskId }?.group,
         )
@@ -483,7 +437,6 @@ object WorkspaceState {
         // append without disturbing the user's existing spatial layout.
         mutableTasks.add(task)
         focusedTaskId = task.id
-        revealFocusedTaskRequested = true
         notifyChanged()
         onImmediateSyncRequested?.invoke()
         return task
@@ -509,7 +462,7 @@ object WorkspaceState {
         onImmediateSyncRequested?.invoke()
     }
 
-    fun focus(id: Long, reveal: Boolean = false) {
+    fun focus(id: Long) {
         val task = mutableTasks.firstOrNull { it.id == id } ?: return
         if (task.workspace in 1..10 && !task.pinned && task.workspace != activeWorkspace) switchWorkspace(task.workspace)
         if (task.workspace == 0) scratchpadVisible = true
@@ -523,12 +476,11 @@ object WorkspaceState {
         task.beastRequestUntil = SystemClock.uptimeMillis() + BEAST_MOVE_GRACE_MS
         task.closeError = null
         focusedTaskId = id
-        if (reveal) revealFocusedTaskRequested = true
         notifyChanged()
         onImmediateSyncRequested?.invoke()
     }
 
-    /** Focus the adjacent visible card and ask BeastUI to reveal it in the horizontal strip. */
+    /** Focus the adjacent visible window in the current workspace. */
     fun focusRelative(delta: Int): Boolean {
         if (delta == 0) return false
         val visibleIds = mutableTasks.asSequence()
@@ -539,7 +491,7 @@ object WorkspaceState {
             .map(BeastTask::id)
             .toList()
         val targetId = relativeFocusTarget(visibleIds, focusedTaskId, delta) ?: return false
-        focus(targetId, reveal = true)
+        focus(targetId)
         return focusedTaskId == targetId
     }
 
@@ -636,7 +588,10 @@ object WorkspaceState {
 
     fun closeAllCandidates(): List<BeastTask> = mutableTasks.toList()
 
-    fun commitGeometry() = persist()
+    fun commitGeometry(resizedTaskId: Long? = null) {
+        resizedTaskId?.let { id -> mutableTasks.firstOrNull { it.id == id }?.let(::rememberFreeformSize) }
+        persist()
+    }
 
     private fun notifyChanged(persist: Boolean = true) {
         if (persist) persist()
@@ -659,7 +614,6 @@ object WorkspaceState {
         val pinned: Boolean,
         val x: Float, val y: Float, val width: Float, val height: Float,
         val group: Long?, val maximized: Boolean, val pseudo: Boolean,
-        val columnScale: Float,
     )
 
     private fun readPersisted(): Map<Int, Persisted> = runCatching {
@@ -683,8 +637,18 @@ object WorkspaceState {
                     item.optDouble("height", .7).toFloat().coerceIn(.15f, 1f),
                     if (item.has("group")) item.getLong("group") else null,
                     item.optBoolean("maximized", false), item.optBoolean("pseudo", false),
-                    item.optDouble("columnScale", 1.0).toFloat().coerceIn(.5f, 2f),
                 ))
+            }
+        }
+    }.getOrDefault(emptyMap())
+
+    private fun readFreeformSizes(): Map<String, Pair<Float, Float>> = runCatching {
+        val saved = JSONObject(prefs?.getString(KEY_FREEFORM_SIZES, "{}") ?: "{}")
+        buildMap {
+            saved.keys().forEach { packageName ->
+                val size = saved.getJSONArray(packageName)
+                put(packageName, size.getDouble(0).toFloat().coerceIn(.15f, 1f) to
+                    size.getDouble(1).toFloat().coerceIn(.15f, 1f))
             }
         }
     }.getOrDefault(emptyMap())
@@ -704,18 +668,24 @@ object WorkspaceState {
                 put("floating", task.floating); put("pinned", task.pinned)
                 put("x", task.floatingX); put("y", task.floatingY)
                 put("width", task.floatingWidth); put("height", task.floatingHeight)
-                put("columnScale", task.columnScale)
                 task.group?.let { put("group", it) }; put("maximized", task.maximized); put("pseudo", task.pseudo)
             })
         }
-        prefs?.edit()?.putString(KEY_STATE, array.toString())?.putInt("active_workspace", activeWorkspace)?.apply()
+        val freeformSizes = JSONObject().apply {
+            lastFreeformSizes.forEach { (packageName, size) ->
+                put(packageName, JSONArray().put(size.first.toDouble()).put(size.second.toDouble()))
+            }
+        }
+        prefs?.edit()?.putString(KEY_STATE, array.toString())
+            ?.putString(KEY_FREEFORM_SIZES, freeformSizes.toString())
+            ?.putInt("active_workspace", activeWorkspace)?.apply()
         prefs?.edit()?.apply {
-            workspaceLayouts.forEach { (workspace, layout) -> putString("layout_$workspace", layout.name) }
             dwindleLayouts.forEach { (workspace, tree) -> putString("dwindle_$workspace", tree.save()) }
         }?.apply()
     }
 
     private const val KEY_STATE = "state.v2"
+    private const val KEY_FREEFORM_SIZES = "freeform_sizes.v1"
     private const val MISSING_GRACE_POLLS = 3
     private const val BEAST_MOVE_GRACE_MS = 2_500L
     private const val DISPLAY_MODE_HANDOFF_TIMEOUT_MS = 15_000L

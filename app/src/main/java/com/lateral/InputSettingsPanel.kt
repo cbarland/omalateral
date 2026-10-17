@@ -117,11 +117,6 @@ object InputSettingsPanel {
                 InputSettings.setInvertScrollbarScroll(context, checked)
             }
         }
-        val momentum = Switch(context).apply {
-            text = "Scroll momentum"
-            isChecked = InputSettings.momentumEnabled
-            setOnCheckedChangeListener { _, checked -> InputSettings.setMomentumEnabled(context, checked) }
-        }
         val startMinimized = Switch(context).apply {
             text = "Startup: open apps minimized"
             isChecked = InputSettings.startOpenAppsMinimized
@@ -136,29 +131,6 @@ object InputSettingsPanel {
                 InputSettings.setShowPhoneTaskbar(context, checked)
             }
         }
-        fun alignmentControl(title: String, current: () -> BarAlignment, set: (BarAlignment) -> Unit) =
-            TextView(context).apply {
-                typeface = Typeface.MONOSPACE
-                setTextColor(Color.rgb(210, 220, 218))
-                setPadding(0, dp(8), 0, dp(8))
-                fun update() { text = "$title  ${current().name.lowercase()}" }
-                update()
-                setOnClickListener {
-                    val choices = BarAlignment.entries.map { it.name.lowercase() }.toTypedArray()
-                    showTrackedDialog(android.app.AlertDialog.Builder(context)
-                        .setTitle(title)
-                        .setSingleChoiceItems(choices, current().ordinal) { dialog, which ->
-                            set(BarAlignment.entries[which])
-                            update()
-                            dialog.dismiss()
-                        })
-                }
-            }
-        val taskbarAlignment = alignmentControl(
-            "Taskbar alignment",
-            { InputSettings.taskbarAlignment },
-            { InputSettings.setTaskbarAlignment(context, it) },
-        )
         val personalizationTitle = TextView(context).apply {
             text = "Personalization / Omarchy theme"
             typeface = Typeface.MONOSPACE
@@ -274,10 +246,8 @@ object InputSettingsPanel {
         panel.addView(pinchZoomSensitivity)
         panel.addView(invertTwoFingerScroll)
         panel.addView(invertScrollbarScroll)
-        panel.addView(momentum)
         panel.addView(startMinimized)
         panel.addView(showPhoneTaskbar)
-        panel.addView(taskbarAlignment)
         panel.addView(personalizationTitle)
         panel.addView(themeValueLabel)
         panel.addView(themeGrid)

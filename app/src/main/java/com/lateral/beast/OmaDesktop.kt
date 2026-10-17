@@ -118,7 +118,12 @@ class OmaDesktop(
         state.promptRequest = if (submit) PromptRequest.Submit else PromptRequest.Type
     }
 
+    override fun apps() { state.open() }
     override fun widgets() { state.storeOpen = true }
+    override fun homeMenu(): Boolean {
+        state.homeMenuOpen = true
+        return true
+    }
     override fun themes() { state.styleOpen = true }
 
     override fun dismissPanels() {

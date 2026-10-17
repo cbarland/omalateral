@@ -12,7 +12,6 @@ import android.widget.Toast
 import com.lateral.beast.AndroidTaskSynchronizer
 import com.lateral.beast.PresentationMode
 import com.lateral.beast.TaskPlacement
-import com.lateral.beast.WorkspaceLayout
 import com.lateral.beast.WorkspaceState
 
 /** Phone-owned window controls. Every operation is available without a keyboard or long press. */
@@ -80,7 +79,6 @@ object PhoneWindowsPanel {
                 row(listOf("Cancel move" to { moving = false; render() }))
             } else {
                 row(listOf(
-                    (if (WorkspaceState.layout() == WorkspaceLayout.DWINDLE) "Layout: tiles" else "Layout: columns") to { WorkspaceState.toggleLayout() },
                     (if (WorkspaceState.scratchpadVisible) "Hide shelf" else "Shelf (${WorkspaceState.tasks.count { it.workspace == 0 }})") to { WorkspaceState.toggleScratchpad() },
                 ))
                 val tasks = WorkspaceState.tasks.filter {
@@ -106,7 +104,7 @@ object PhoneWindowsPanel {
                             render()
                         } else {
                             selected = window.id
-                            WorkspaceState.focus(window.id, reveal = true)
+                            WorkspaceState.focus(window.id)
                         }
                     }))
                 }
@@ -131,15 +129,13 @@ object PhoneWindowsPanel {
                                 "Move →" to { WorkspaceState.moveFloating(task.id, .05f, 0f) }))
                             row(listOf("↑ Move" to { WorkspaceState.moveFloating(task.id, 0f, -.05f) },
                                 "Move ↓" to { WorkspaceState.moveFloating(task.id, 0f, .05f) }))
-                        } else if (WorkspaceState.layout() == WorkspaceLayout.DWINDLE) {
+                        } else {
                             row(listOf("Rotate split" to { WorkspaceState.focus(task.id); WorkspaceState.toggleSplit() }))
                         }
-                        if (task.floating || WorkspaceState.layout() == WorkspaceLayout.DWINDLE) {
-                            row(listOf("Narrower" to { WorkspaceState.focus(task.id); WorkspaceState.resizeFocused(true, -.05f) },
-                                "Wider" to { WorkspaceState.focus(task.id); WorkspaceState.resizeFocused(true, .05f) }))
-                            row(listOf("Shorter" to { WorkspaceState.focus(task.id); WorkspaceState.resizeFocused(false, -.05f) },
-                                "Taller" to { WorkspaceState.focus(task.id); WorkspaceState.resizeFocused(false, .05f) }))
-                        }
+                        row(listOf("Narrower" to { WorkspaceState.focus(task.id); WorkspaceState.resizeFocused(true, -.05f) },
+                            "Wider" to { WorkspaceState.focus(task.id); WorkspaceState.resizeFocused(true, .05f) }))
+                        row(listOf("Shorter" to { WorkspaceState.focus(task.id); WorkspaceState.resizeFocused(false, -.05f) },
+                            "Taller" to { WorkspaceState.focus(task.id); WorkspaceState.resizeFocused(false, .05f) }))
                     }
                     row(listOf("Hide window" to { WorkspaceState.minimize(task.id) },
                         (if (task.workspace == 0) "Return from shelf" else "Put on shelf") to {
@@ -166,7 +162,7 @@ object PhoneWindowsPanel {
         val listener: () -> Unit = {
             val windows = WorkspaceState.tasks.map { listOf(it.id, it.label, it.placement, it.workspace,
                 it.floating, it.pinned, it.mode, it.group, it.closeError) }
-            val next = "${WorkspaceState.activeWorkspace}/${WorkspaceState.layout()}/${WorkspaceState.scratchpadVisible}/$selected/$windows"
+            val next = "${WorkspaceState.activeWorkspace}/${WorkspaceState.scratchpadVisible}/$selected/$windows"
             if (next != snapshot) { snapshot = next; render() }
         }
         WorkspaceState.addListener(listener)

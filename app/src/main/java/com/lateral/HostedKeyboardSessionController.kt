@@ -68,6 +68,15 @@ class HostedKeyboardSessionController(
     }
 
     fun begin(next: HostedTextInputSession.Target) {
+        if (target == next) return
+        if (target != null && state in setOf(State.ACTIVE, State.ACTIVATING)) {
+            // The same temporary IME lease can follow focus from one editor to another.
+            target = next
+            deadline = SystemClock.uptimeMillis() + ACTIVATION_TIMEOUT_MS
+            updateState(State.ACTIVATING, "Connecting keyboard…")
+            verifyTarget()
+            return
+        }
         generation++
         target = next
         updateState(State.ACTIVATING, "Connecting keyboard…")

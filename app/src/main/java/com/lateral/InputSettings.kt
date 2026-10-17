@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Color
 import java.util.concurrent.CopyOnWriteArraySet
 
-enum class BarAlignment { LEFT, CENTER, RIGHT }
 
 /** Persisted PhoneUI input preferences shared with the Beast workspace. */
 object InputSettings {
@@ -16,7 +15,6 @@ object InputSettings {
     private const val KEY_INVERT_SCROLL = "invert_scroll"
     private const val KEY_INVERT_TWO_FINGER_SCROLL = "invert_two_finger_scroll"
     private const val KEY_INVERT_SCROLLBAR_SCROLL = "invert_scrollbar_scroll"
-    private const val KEY_MOMENTUM = "scroll_momentum"
     private const val KEY_ULTRAWIDE = "beast_ultrawide"
     private const val KEY_BEAST_TIMING_SET = "beast_timing_set"
     private const val KEY_BEAST_TIMING_WIDTH = "beast_timing_width"
@@ -30,9 +28,6 @@ object InputSettings {
     private const val KEY_SUPERSAMPLING = "display_supersampling"
     private const val KEY_START_MINIMIZED = "start_open_apps_minimized"
     private const val KEY_SHOW_PHONE_TASKBAR = "show_phone_taskbar"
-    private const val KEY_CENTER_BOTTOM_CONTROLS = "center_bottom_controls"
-    private const val KEY_TOOLBAR_ALIGNMENT = "toolbar_alignment"
-    private const val KEY_TASKBAR_ALIGNMENT = "taskbar_alignment"
     private const val KEY_THEME = "omarchy_theme"
     private const val KEY_THEME_PALETTE = "omarchy_theme_palette"
 
@@ -45,8 +40,6 @@ object InputSettings {
     @Volatile var invertTwoFingerScroll = false
         private set
     @Volatile var invertScrollbarScroll = false
-        private set
-    @Volatile var momentumEnabled = true
         private set
     @Volatile var ultrawideEnabled = false
         private set
@@ -68,10 +61,6 @@ object InputSettings {
         private set
     /** PhoneUI defaults to a clean touchpad-only controller; the taskbar is opt-in. */
     @Volatile var showPhoneTaskbar = false
-        private set
-    @Volatile var toolbarAlignment = BarAlignment.RIGHT
-        private set
-    @Volatile var taskbarAlignment = BarAlignment.LEFT
         private set
     @Volatile var theme = OmarchyThemes.default
         private set
@@ -101,7 +90,6 @@ object InputSettings {
             KEY_INVERT_SCROLLBAR_SCROLL,
             !legacyInvertScroll,
         )
-        momentumEnabled = prefs.getBoolean(KEY_MOMENTUM, true)
         ultrawideEnabled = prefs.getBoolean(KEY_ULTRAWIDE, false)
         preferredBeastTiming = if (prefs.getBoolean(KEY_BEAST_TIMING_SET, false)) {
             BeastTiming(
@@ -126,14 +114,6 @@ object InputSettings {
         displaySupersampling = prefs.getFloat(KEY_SUPERSAMPLING, 1.25f).coerceIn(1f, 2f)
         startOpenAppsMinimized = prefs.getBoolean(KEY_START_MINIMIZED, true)
         showPhoneTaskbar = prefs.getBoolean(KEY_SHOW_PHONE_TASKBAR, false)
-        val legacyBottomControlsCentered = prefs.getBoolean(KEY_CENTER_BOTTOM_CONTROLS, true)
-        // Preserve the old two-position preference as the migration default.
-        toolbarAlignment = prefs.getString(KEY_TOOLBAR_ALIGNMENT, null)
-            ?.let { runCatching { BarAlignment.valueOf(it) }.getOrNull() }
-            ?: if (legacyBottomControlsCentered) BarAlignment.RIGHT else BarAlignment.LEFT
-        taskbarAlignment = prefs.getString(KEY_TASKBAR_ALIGNMENT, BarAlignment.LEFT.name)
-            ?.let { runCatching { BarAlignment.valueOf(it) }.getOrNull() }
-            ?: BarAlignment.LEFT
         val selectedTheme = prefs.getString(KEY_THEME, OmarchyThemes.DEFAULT_ID).orEmpty()
         val savedPalette = runCatching {
             val json = org.json.JSONObject(prefs.getString(KEY_THEME_PALETTE, null) ?: return@runCatching null)
@@ -276,20 +256,6 @@ object InputSettings {
         appearanceListeners.forEach { it() }
     }
 
-    fun setToolbarAlignment(context: Context, value: BarAlignment) {
-        toolbarAlignment = value
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_TOOLBAR_ALIGNMENT, value.name).apply()
-        appearanceListeners.forEach { it() }
-    }
-
-    fun setTaskbarAlignment(context: Context, value: BarAlignment) {
-        taskbarAlignment = value
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_TASKBAR_ALIGNMENT, value.name).apply()
-        appearanceListeners.forEach { it() }
-    }
-
     fun setInvertTwoFingerScroll(context: Context, value: Boolean) {
         invertTwoFingerScroll = value
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
@@ -300,12 +266,6 @@ object InputSettings {
         invertScrollbarScroll = value
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putBoolean(KEY_INVERT_SCROLLBAR_SCROLL, value).apply()
-    }
-
-    fun setMomentumEnabled(context: Context, value: Boolean) {
-        momentumEnabled = value
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putBoolean(KEY_MOMENTUM, value).apply()
     }
 
     fun setUltrawideEnabled(context: Context, value: Boolean) {

@@ -64,7 +64,13 @@ class DesktopChromeAndroidTest {
                     assertTrue("Title starts ${title.left} before left group ${left.right} at $width / $scale", title.left >= left.right)
                     assertTrue("Title ends ${title.right} after right group ${right.left} at $width / $scale", title.right <= right.left)
                 }
+                val resizeHandle = field<View>(card, "resizeHandle")
+                assertEquals(View.GONE, resizeHandle.visibility)
+                task.floating = true
+                card.bind(task, true)
+                assertEquals(View.VISIBLE, resizeHandle.visibility)
                 card.setFullscreen(true)
+                assertEquals(View.GONE, resizeHandle.visibility)
                 val exit = field<TextView>(card, "fullscreenExit")
                 assertEquals("EXIT  P", exit.text.toString())
                 assertEquals(View.VISIBLE, exit.visibility)
@@ -128,10 +134,8 @@ class DesktopChromeAndroidTest {
             }
             Thread.sleep(400)
             onMain {
-                val tabs = field<View>(activity, "taskbar")
-                assertNotNull(find(tabs, fixture!!.shortLabel.uppercase()))
                 assertTrue(field<View>(activity, "launcher").isShown)
-                assertEquals(View.GONE, field<View>(activity, "taskbarShell").visibility)
+                assertEquals(View.VISIBLE, field<View>(activity, "workspaceSurface").visibility)
                 WorkspaceState.setMode(fixture!!.id, PresentationMode.FULLSCREEN)
             }
             Thread.sleep(200)
@@ -206,7 +210,7 @@ class DesktopChromeAndroidTest {
             await("Returns to tablet") { task!!.mode == PresentationMode.TABLET }
             onMain { WorkspaceState.minimize(task!!.id) }
             Thread.sleep(400)
-            onMain { WorkspaceState.focus(task!!.id, reveal = true) }
+            onMain { WorkspaceState.focus(task!!.id) }
             await("Window restored") { task!!.placement == TaskPlacement.BEAST_VISIBLE }
             Thread.sleep(700)
             capture(activity, "android-restored")

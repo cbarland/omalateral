@@ -487,7 +487,9 @@ internal class ExternalOmaDesktop private constructor(
     private fun report(message: String) { Toast.makeText(activity, message, Toast.LENGTH_LONG).show() }
     override fun visible(visible: Boolean) { this.visible = visible; local?.visible(visible); sendRemote { setVisible(visible) } }
     override fun search(query: String, submit: Boolean) { if (local != null) local!!.search(query, submit) else sendRemote { search(query, submit) } }
+    override fun apps() { if (local != null) local!!.apps() else sendRemote { action("drawer") } }
     override fun widgets() { if (local != null) local!!.widgets() else sendRemote { action("widgets") } }
+    override fun homeMenu(): Boolean = local?.homeMenu() ?: false
     override fun themes() { if (local != null) local!!.themes() else report("Choose a theme in Omalauncher on the phone; the workspace follows it automatically") }
     override fun dismissPanels() { local?.dismissPanels(); sendRemote { action("dismiss") }; onOverlay(false) }
     override fun key(event: KeyEvent): Boolean {

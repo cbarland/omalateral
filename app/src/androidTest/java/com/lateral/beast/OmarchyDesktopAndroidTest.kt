@@ -15,7 +15,14 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
+import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getAllSemanticsNodes
+import androidx.compose.ui.semantics.getOrNull
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
+import com.lateral.DesktopShellSettings
 import com.lateral.privileged.PrivilegedService
 import com.lateral.privileged.UsbHelperLifecycleAndroidTest
 import org.junit.Assert.*
@@ -55,7 +62,10 @@ class OmarchyDesktopAndroidTest {
         var previousWorkspace = 1
         var testWorkspace = 10
         var otherWorkspace = 9
-        var previousLayout = WorkspaceLayout.DWINDLE
+        val autoStartWasEnabled = DesktopShellSettings.autoStart(context)
+        // The test owns an embedded desktop. Prevent PhoneUI's reconnect watchdog
+        // from opening a second, bridge-backed session during keyboard assertions.
+        DesktopShellSettings.setAutoStart(context, false)
         try {
             await("Helper ready") { PrivilegedService.isBridgeReady() }
             ui { WorkspaceState.init(context); AndroidTaskSynchronizer.init(context) }
@@ -70,9 +80,7 @@ class OmarchyDesktopAndroidTest {
                 val empty = (1..10).filter { number -> WorkspaceState.tasks.none { it.workspace == number } }
                 check(empty.size >= 2) { "Two unused test workspaces are required" }
                 testWorkspace = empty.last(); otherWorkspace = empty[empty.lastIndex - 1]
-                previousLayout = WorkspaceState.layout(testWorkspace)
                 WorkspaceState.switchWorkspace(testWorkspace)
-                if (WorkspaceState.layout() != WorkspaceLayout.DWINDLE) WorkspaceState.toggleLayout()
                 tasks += WorkspaceState.launchNew(instrumentation.context.packageName, FixtureOneActivity::class.java.name, "FIXTURE ONE")
                 tasks += WorkspaceState.launchNew(instrumentation.context.packageName, FixtureTwoActivity::class.java.name, "FIXTURE TWO")
                 tasks += WorkspaceState.launchNew("com.google.android.documentsui", "com.android.documentsui.files.FilesActivity", "Files")
@@ -88,10 +96,10 @@ class OmarchyDesktopAndroidTest {
                 val boxes = tasks.map { Rect().also { box -> cards.getValue(it.id).getGlobalVisibleRect(box) } }
                 for (i in boxes.indices) for (j in i + 1 until boxes.size) assertFalse("Tiled panes overlap", Rect.intersects(boxes[i], boxes[j]))
                 tasks.forEach { assertEquals(View.VISIBLE, field<View>(cards.getValue(it.id), "chrome").visibility) }
-                assertEquals(View.GONE, field<View>(host, "taskbarShell").visibility)
+                assertTrue("Workspace fits a single viewport", field<View>(host, "workspaceSurface").width > 0)
             }
             ui {
-                val viewport = field<View>(host, "workspaceScroll")
+                val viewport = field<View>(host, "workspaceSurface")
                 val inset = (10 * host.resources.displayMetrics.density).toInt()
                 val before = WorkspaceState.windowBounds(viewport.width, viewport.height, inset, inset)
                 val cards = field<Map<Long, BeastTaskCard>>(host, "cards")
@@ -124,15 +132,11 @@ class OmarchyDesktopAndroidTest {
                 assertTrue("Dropping a tile away from another pane keeps it floating", tasks.first().floating)
                 WorkspaceState.toggleFloating(tasks.first().id)
             }
-            chord(host, KeyEvent.KEYCODE_L)
-            assertEquals(WorkspaceLayout.SCROLLING, ui { WorkspaceState.layout() })
             ui { WorkspaceState.focus(tasks.last().id) }
             val workspaceKey = if (otherWorkspace == 10) KeyEvent.KEYCODE_0 else KeyEvent.KEYCODE_1 + otherWorkspace - 1
             chord(host, workspaceKey, KeyEvent.META_SHIFT_ON)
             await("Window moved to another workspace") { tasks.last().workspace == otherWorkspace && WorkspaceState.activeWorkspace == otherWorkspace }
             ui { WorkspaceState.switchWorkspace(testWorkspace) }
-            assertEquals(WorkspaceLayout.SCROLLING, ui { WorkspaceState.layout() })
-            chord(host, KeyEvent.KEYCODE_L)
             ui { WorkspaceState.focus(tasks.first().id) }
             chord(host, KeyEvent.KEYCODE_T)
             await("Floating pane") {
@@ -208,19 +212,52 @@ class OmarchyDesktopAndroidTest {
             }
             capture(host, "menu", ui { field<Dialog>(host, "workspaceMenu") })
             ui { field<Dialog>(host, "workspaceMenu").dismiss() }
+            chord(host, KeyEvent.KEYCODE_A)
+            await("Omalauncher search opens") { LauncherSearchSession.active }
+            await("FlorisBoard follows the phone search editor") {
+                val phone = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED)
+                    .filterIsInstance<com.lateral.MainActivity>().firstOrNull()
+                phone != null && field<View>(phone, "embeddedKeyboardView").isShown &&
+                    dev.patrickgold.florisboard.embedded.EmbeddedImeRuntime.editorSession.value?.packageName == context.packageName
+            }
+            ui { LauncherSearchSession.close() }
+            ui { field<DesktopSession>(host, "omaDesktop").widgets() }
+            await("Omalauncher widget search is visible") {
+                widgetSearch(host) != null
+            }
+            ui {
+                val point = checkNotNull(widgetSearch(host)).boundsInWindow.center
+                assertTrue(host.routeAppClick(display.displayId, point.x.toInt(), point.y.toInt(), MotionEvent.BUTTON_PRIMARY))
+            }
+            await("Widget pane owns the phone editor") { DesktopTextInputSession.active }
+            await("FlorisBoard follows widget search") {
+                val phone = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED)
+                    .filterIsInstance<com.lateral.MainActivity>().firstOrNull()
+                phone != null && field<View>(phone, "embeddedKeyboardView").isShown &&
+                    dev.patrickgold.florisboard.embedded.EmbeddedImeRuntime.editorSession.value?.packageName == context.packageName
+            }
+            ui { DesktopTextInputSession.close(); field<DesktopSession>(host, "omaDesktop").dismissPanels() }
             assertEquals(identities, ui { tasks.map { it.androidTaskId to it.androidDisplayId } })
         } finally {
             ui {
                 tasks.forEach { task -> AndroidTaskSynchronizer.closeTask(task) {} }
                 if (WorkspaceState.scratchpadVisible) WorkspaceState.toggleScratchpad()
                 WorkspaceState.switchWorkspace(testWorkspace)
-                if (WorkspaceState.layout() != previousLayout) WorkspaceState.toggleLayout()
                 WorkspaceState.switchWorkspace(previousWorkspace)
                 activity?.finish()
             }
             helper?.close()
+            DesktopShellSettings.setAutoStart(context, autoStartWasEnabled)
         }
     }
+
+    private fun widgetSearch(activity: BeastActivity) = views(activity.window.decorView)
+        .filterIsInstance<ViewRootForTest>()
+        .flatMap { it.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false) }
+        .firstOrNull { it.config.getOrNull(SemanticsProperties.EditableText) != null }
+
+    private fun views(root: View): List<View> = listOf(root) +
+        if (root is ViewGroup) (0 until root.childCount).flatMap { views(root.getChildAt(it)) } else emptyList()
 
     private fun capture(activity: BeastActivity, name: String, dialog: Dialog? = null) {
         Thread.sleep(250)

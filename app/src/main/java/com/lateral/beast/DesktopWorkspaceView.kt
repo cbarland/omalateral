@@ -2,13 +2,13 @@ package com.lateral.beast
 
 import android.content.Context
 import android.view.MotionEvent
-import android.widget.HorizontalScrollView
+import android.widget.FrameLayout
 
-/** Transparent space between windows belongs to the desktop below this strip. */
-internal class DesktopWorkspaceScrollView(
+/** Only window gestures belong to this layer; gaps pass through to Omalauncher. */
+internal class DesktopWorkspaceView(
     context: Context,
     private val occupies: (Int, Int) -> Boolean,
-) : HorizontalScrollView(context) {
+) : FrameLayout(context) {
     private var windowGesture = false
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {

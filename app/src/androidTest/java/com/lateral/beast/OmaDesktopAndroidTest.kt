@@ -17,6 +17,7 @@ import android.widget.FrameLayout
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import com.lateral.InputSettings
+import com.lateral.DesktopShellSettings
 import dev.omalauncher.RuntimeOwner
 import org.junit.Assert.*
 import org.junit.Test
@@ -26,6 +27,71 @@ import java.util.concurrent.TimeUnit
 
 /** Captures the actual external window, without the emulator's translucent overlay display. */
 class OmaDesktopAndroidTest {
+    @Test fun topBarUsesOmaPanesAndHomeLongClickUsesStockMenu() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val display = checkNotNull(BeastActivity.findExternalDisplay(context))
+        val previousWorkspace = WorkspaceState.activeWorkspace
+        val emptyWorkspace = (1..10).first { number -> WorkspaceState.tasks.none { it.workspace == number } }
+        val options = ActivityOptions.makeBasic().apply { launchDisplayId = display.displayId }
+        val autoStartWasEnabled = DesktopShellSettings.autoStart(context)
+        // PhoneUI's watchdog intentionally relaunches a closed external workspace.
+        // Suspend it only while ActivityScenario owns and closes this fixture.
+        DesktopShellSettings.setAutoStart(context, false)
+        try {
+        ActivityScenario.launch<BeastActivity>(Intent(context, BeastActivity::class.java)
+            .setAction(BeastActivity.ACTION_ENSURE_WORKSPACE).putExtra("embeddedDesktop", true)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), options.toBundle()).use { scenario ->
+            fun state(activity: BeastActivity) = field<dev.omalauncher.ui.LauncherState>(
+                field<OmaDesktop>(activity, "omaDesktop"), "state")
+            fun click(activity: BeastActivity, label: String) {
+                val toolbar = field<View>(activity, "toolbar")
+                assertTrue(checkNotNull(findDescription(toolbar, label)).performClick())
+            }
+            try {
+                scenario.onActivity { activity ->
+                    WorkspaceState.switchWorkspace(emptyWorkspace)
+                    click(activity, "Applications · Super+D")
+                }
+                Thread.sleep(600)
+                scenario.onActivity { activity ->
+                    assertTrue("Oma app drawer opens", state(activity).drawer.value > .01f)
+                    activity.javaClass.getDeclaredMethod("hideLauncher").apply { isAccessible = true }.invoke(activity)
+                    click(activity, "Omalauncher widgets")
+                    assertTrue("Oma widget pane opens", state(activity).storeOpen)
+                }
+                Thread.sleep(BeastControlDebouncer.DEBOUNCE_MS + 100)
+                scenario.onActivity { activity ->
+                    activity.javaClass.getDeclaredMethod("hideLauncher").apply { isAccessible = true }.invoke(activity)
+                    click(activity, "Search apps or ask an agent · Super+A")
+                    assertTrue("Search starts the phone keyboard session", LauncherSearchSession.active)
+                    assertTrue("Prompt temporarily replaces the top-bar clock",
+                        field<android.widget.TextView>(activity, "systemStatus").text.startsWith("⌕"))
+                    LauncherSearchSession.updateQuery("maps")
+                    assertTrue(field<android.widget.TextView>(activity, "systemStatus").text.contains("maps"))
+                    activity.javaClass.getDeclaredMethod("hideLauncher").apply { isAccessible = true }.invoke(activity)
+
+                    val viewport = field<View>(activity, "workspaceSurface")
+                    val location = IntArray(2).also(viewport::getLocationOnScreen)
+                    assertTrue(activity.routeAppClick(display.displayId,
+                        location[0] + viewport.width / 2, location[1] + viewport.height / 2,
+                        MotionEvent.BUTTON_SECONDARY))
+                    assertTrue("Long-click opens the stock Omalauncher menu", state(activity).homeMenuOpen)
+                    assertEquals("Home occupies the whole workspace", viewport.width,
+                        field<View>(activity, "taskStrip").width)
+                }
+            } finally {
+                scenario.onActivity { activity ->
+                    field<DesktopSession>(activity, "omaDesktop").dismissPanels()
+                    WorkspaceState.switchWorkspace(previousWorkspace)
+                    LauncherSearchSession.close()
+                }
+            }
+        }
+        } finally {
+            DesktopShellSettings.setAutoStart(context, autoStartWasEnabled)
+        }
+    }
+
     @Test fun externalDesktopLoadsRealWidgetsAndSynchronizesTheme() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
@@ -119,7 +185,7 @@ class OmaDesktopAndroidTest {
                     assertTrue(field<View>(activity, "fullscreenLayer").isShown)
                     assertSame(desktop, field<View>(activity, "launcher"))
                     WorkspaceState.setMode(task.id, PresentationMode.PHONE)
-                    assertTrue(checkNotNull(findLabel(field(activity, "toolbar"), "MIN ALL")).performClick())
+                    activity.javaClass.getDeclaredMethod("showOmaDesktop").apply { isAccessible = true }.invoke(activity)
                     assertEquals(TaskPlacement.BEAST_MINIMIZED, task.placement)
                     assertEquals(0, field<ViewGroup>(activity, "taskStrip").childCount)
                     assertTrue(desktop.isShown)
@@ -142,7 +208,14 @@ class OmaDesktopAndroidTest {
         return null
     }
 
-    private fun <T> field(activity: BeastActivity, name: String): T {
+    private fun findDescription(root: View, text: String): View? {
+        if (root.contentDescription == text) return root
+        if (root is ViewGroup) for (i in 0 until root.childCount)
+            findDescription(root.getChildAt(i), text)?.let { return it }
+        return null
+    }
+
+    private fun <T> field(activity: Any, name: String): T {
         @Suppress("UNCHECKED_CAST")
         return activity.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(activity) as T
     }
@@ -166,7 +239,7 @@ class OmaDesktopAndroidTest {
                     return true
                 }
             }
-            val strip = DesktopWorkspaceScrollView(context) { x, _ -> x < 300 }
+            val strip = DesktopWorkspaceView(context) { x, _ -> x < 300 }
             val content = FrameLayout(context).apply { addView(tile, FrameLayout.LayoutParams(300, 600)) }
             strip.addView(content, FrameLayout.LayoutParams(1000, 600))
             root.addView(desktop, FrameLayout.LayoutParams(1000, 600))

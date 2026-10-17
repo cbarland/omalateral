@@ -3,8 +3,8 @@ package com.lateral.beast
 import android.view.KeyEvent
 
 internal enum class OmarchyCommand {
-    MENU, APPS, TERMINAL, BROWSER, FILES, CLOSE, CLOSE_ALL, FULLSCREEN, FLOAT, PIN,
-    LAYOUT, SPLIT, FOCUS, SWAP, WORKSPACE, MOVE_WORKSPACE, CYCLE_WORKSPACE, PREVIOUS_WORKSPACE,
+    MENU, SEARCH, APPS, TERMINAL, BROWSER, FILES, CLOSE, CLOSE_ALL, FULLSCREEN, FLOAT, PIN,
+    SPLIT, FOCUS, SWAP, WORKSPACE, MOVE_WORKSPACE, CYCLE_WORKSPACE, PREVIOUS_WORKSPACE,
     CYCLE_WINDOW, SCRATCHPAD, MOVE_SCRATCHPAD, RESIZE, GROUP, UNGROUP, GROUP_FOCUS, GROUP_JOIN, MAXIMIZE, PSEUDO,
 }
 
@@ -74,12 +74,12 @@ internal object OmarchyShortcuts {
         if (alt) return null
         return when (key) {
             KeyEvent.KEYCODE_SPACE -> OmarchyShortcut(OmarchyCommand.MENU)
-            KeyEvent.KEYCODE_A -> OmarchyShortcut(OmarchyCommand.APPS)
+            KeyEvent.KEYCODE_A -> OmarchyShortcut(OmarchyCommand.SEARCH)
+            KeyEvent.KEYCODE_D -> OmarchyShortcut(OmarchyCommand.APPS)
             KeyEvent.KEYCODE_W -> OmarchyShortcut(OmarchyCommand.CLOSE)
             KeyEvent.KEYCODE_F -> OmarchyShortcut(OmarchyCommand.FULLSCREEN)
             KeyEvent.KEYCODE_T -> OmarchyShortcut(OmarchyCommand.FLOAT)
             KeyEvent.KEYCODE_O -> OmarchyShortcut(OmarchyCommand.PIN)
-            KeyEvent.KEYCODE_L -> OmarchyShortcut(OmarchyCommand.LAYOUT)
             KeyEvent.KEYCODE_J -> OmarchyShortcut(OmarchyCommand.SPLIT)
             KeyEvent.KEYCODE_P -> OmarchyShortcut(OmarchyCommand.PSEUDO)
             else -> null

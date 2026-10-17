@@ -34,11 +34,9 @@ import android.view.WindowManager
 import android.graphics.Rect
 import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.OverScroller
 import android.text.TextUtils
 import android.view.inputmethod.InputMethodManager
 import java.util.concurrent.atomic.AtomicInteger
@@ -49,7 +47,6 @@ import java.util.Locale
 import kotlin.math.roundToInt
 import androidx.appcompat.app.AppCompatActivity
 import com.lateral.SimpleTextWatcher
-import com.lateral.BarAlignment
 import com.lateral.InputSettings
 import com.lateral.InputSettingsPanel
 import com.lateral.ExternalDisplayPanel
@@ -59,20 +56,15 @@ import com.lateral.WorkspaceCursor
 import com.lateral.TransientPanelCoordinator
 import com.lateral.privileged.PrivilegedService
 
-/** The external-display workspace: an ordered one-dimensional strip of Android tasks. */
+/** The external-display workspace: tiled and floating Android tasks over Omalauncher. */
 class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, BeastInputRouter.Handler {
     companion object {
         val ACTION_ENSURE_WORKSPACE = BuildConfig.APPLICATION_ID + ".action.ENSURE_BEAST_WORKSPACE"
         val ACTION_SHOW_LAUNCHER = BuildConfig.APPLICATION_ID + ".action.SHOW_BEAST_LAUNCHER"
-        private const val MOMENTUM_DELAY_MS = 70L
-        private const val MIN_FLING_VELOCITY = 120f
+        val ACTION_SHOW_APPS = BuildConfig.APPLICATION_ID + ".action.SHOW_BEAST_APPS"
+        val ACTION_SHOW_WIDGETS = BuildConfig.APPLICATION_ID + ".action.SHOW_BEAST_WIDGETS"
         private const val SHOW_ALL_BATCH_TIMEOUT_MS = 6_000L
-        private const val TASKBAR_TEXT_SIZE = 11f
         private const val TOOLBAR_TEXT_SIZE = 11f
-        private const val TASKBAR_LABEL_CHARACTERS = 12
-        private const val TASKBAR_HEIGHT_DP = 38
-        private const val TASKBAR_STEP_CONTROL_WIDTH_DP = 28
-        private const val TASKBAR_SCROLL_STEP_FRACTION = .68f
         private const val SYSTEM_STATUS_INTERVAL_MS = 1_000L
         private const val APP_DECORATOR_HEIGHT_DP = 32
         private const val APP_DECORATOR_MIN_WIDTH_DP = 300
@@ -114,7 +106,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
     /** Scales rendered content, including the cursor, but leaves Android's logical input grid intact. */
     private lateinit var aspectLayer: FrameLayout
-    private lateinit var workspaceScroll: HorizontalScrollView
+    private lateinit var workspaceSurface: DesktopWorkspaceView
     private lateinit var taskStrip: FrameLayout
     private lateinit var workspaceTabs: LinearLayout
     private lateinit var shellIndicators: TextView
@@ -134,14 +126,6 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         val shared: Boolean,
     )
     private var toolbarRenderKey: ToolbarRenderKey? = null
-    private lateinit var taskbar: FrameLayout
-    private lateinit var taskbarScroll: HorizontalScrollView
-    private lateinit var taskbarContent: LinearLayout
-    private lateinit var taskTabs: LinearLayout
-    private lateinit var taskbarPrevious: TextView
-    private lateinit var taskbarNext: TextView
-    private lateinit var taskbarShell: LinearLayout
-    private lateinit var viewportMap: ViewportMapView
     private lateinit var fullscreenLayer: FrameLayout
     private lateinit var launcher: FrameLayout
     private var omaDesktop: DesktopSession? = null
@@ -215,10 +199,6 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private val modalCursorOverlays = ConcurrentHashMap<Dialog, BeastCursorOverlay>()
     private var workspaceMenu: Dialog? = null
     private lateinit var systemStatus: TextView
-    private val scrollMomentum by lazy { OverScroller(this) }
-    private var momentumVelocity = 0f
-    private var lastScrollAt = 0L
-    private var momentumTargetsLauncher = false
     private val controlDebouncer = BeastControlDebouncer()
     private val shellControlKeys = java.util.WeakHashMap<View, String>()
     private var shellMouseControlKey: String? = null
@@ -256,7 +236,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private val showAllTimeout = Runnable(::finishShowAllBatch)
     private val systemStatusTicker = object : Runnable {
         override fun run() {
-            if (::systemStatus.isInitialized) systemStatus.text = systemStatusText()
+            renderSearchStatus()
             if (::shellIndicators.isInitialized) shellIndicators.text = systemIndicatorsText()
             if (::root.isInitialized) root.postDelayed(this, SYSTEM_STATUS_INTERVAL_MS)
         }
@@ -268,7 +248,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private var recentPackageRank: Map<String, Int> = emptyMap()
     private val stateListener: () -> Unit = {
         runOnUiThread {
-            renderWorkspace(WorkspaceState.consumeRevealFocusedTaskRequest())
+            renderWorkspace()
             if (::launcher.isInitialized && launcherActive && omaDesktop == null) {
                 populateLauncher(launcherQuery.text.toString())
             }
@@ -285,6 +265,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private val launcherSearchListener: () -> Unit = {
         runOnUiThread {
             if (!::launcher.isInitialized) return@runOnUiThread
+            renderSearchStatus()
             if (!LauncherSearchSession.active) {
                 if (launcherActive) hideLauncher()
                 return@runOnUiThread
@@ -327,28 +308,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         }
     }
     private val cursorScrollListener: (Float) -> Unit = { wheel ->
-        runOnUiThread { scrollWorkspace(wheel) }
-    }
-    private val momentumKick = Runnable(::startMomentum)
-    private val momentumFrame = object : Runnable {
-        override fun run() {
-            if (!scrollMomentum.computeScrollOffset()) return
-            if (momentumTargetsLauncher) {
-                launcherScroll.scrollTo(0, scrollMomentum.currY)
-            } else {
-                workspaceScroll.scrollTo(scrollMomentum.currX, 0)
-            }
-            root.postOnAnimation(this)
-        }
-    }
-    private val viewportListener: (Float) -> Unit = { position ->
-        runOnUiThread {
-            val maxScroll = (taskStrip.width - workspaceScroll.width).coerceAtLeast(0)
-            val target = (maxScroll * position).toInt()
-            if (kotlin.math.abs(workspaceScroll.scrollX - target) > 2) {
-                workspaceScroll.scrollTo(target, 0)
-            }
-        }
+        runOnUiThread { routeWorkspaceScroll(wheel) }
     }
     private val resumeGeometryRefresh = Runnable {
         if (!::root.isInitialized || isFinishing || isDestroyed) return@Runnable
@@ -359,19 +319,14 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         applyAppearance()
         root.requestLayout()
         root.postOnAnimation {
-            if (isFinishing || isDestroyed || !::workspaceScroll.isInitialized) return@postOnAnimation
+            if (isFinishing || isDestroyed || !::workspaceSurface.isInitialized) return@postOnAnimation
             updateHorizontalAspectCorrection()
             updateTaskSizes()
             cards.values.forEach { it.renderedVerticalScale = renderedVerticalScale() }
-            val maxScroll = (taskStrip.width - workspaceScroll.width).coerceAtLeast(0)
-            workspaceScroll.scrollTo(
-                (maxScroll * WorkspaceState.viewportPosition).roundToInt(), 0,
-            )
-            syncViewportMap()
             // Wait until card measurements have settled, then reassert each hosted
             // producer's buffer/display geometry. This repairs the short, top-aligned
             // app frame some devices restore after their screen powers back on.
-            workspaceScroll.postOnAnimation {
+            workspaceSurface.postOnAnimation {
                 cards.values.forEach(BeastTaskCard::refreshAfterHostResume)
             }
         }
@@ -411,7 +366,6 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         // Accessing window.insetsController earlier crashes inside PhoneWindow.
         window.decorView.post(::enterImmersiveMode)
         WorkspaceState.addListener(stateListener)
-        WorkspaceState.addViewportListener(viewportListener)
         WorkspaceCursor.addListener(cursorListener)
         WorkspaceCursor.addScrollListener(cursorScrollListener)
         InputSettings.addAppearanceListener(appearanceListener)
@@ -421,6 +375,13 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         PrivilegedService.addListener(privilegedListener)
         applyAppearance()
         renderWorkspace()
+        root.post {
+            when (intent?.action) {
+                ACTION_SHOW_LAUNCHER -> showLauncher()
+                ACTION_SHOW_APPS -> showAppsPane()
+                ACTION_SHOW_WIDGETS -> showWidgetsPane()
+            }
+        }
         root.post(systemStatusTicker)
         if (WorkspaceState.restoreFocusAfterDisplayModeSwitch(display?.mode?.physicalWidth) ||
             WorkspaceState.hasPendingDisplayModeFocusRestore()
@@ -439,6 +400,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         setIntent(intent)
         when (intent.action) {
             ACTION_SHOW_LAUNCHER -> showLauncher()
+            ACTION_SHOW_APPS -> showAppsPane()
+            ACTION_SHOW_WIDGETS -> showWidgetsPane()
             ACTION_ENSURE_WORKSPACE -> restoreWorkspaceFocus()
         }
     }
@@ -472,7 +435,6 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         if (::displayManager.isInitialized) displayManager.unregisterDisplayListener(this)
         WorkspaceState.removeListener(stateListener)
         OmarchyShortcuts.detach(omarchyShortcutHandler)
-        WorkspaceState.removeViewportListener(viewportListener)
         WorkspaceCursor.removeListener(cursorListener)
         WorkspaceCursor.removeScrollListener(cursorScrollListener)
         InputSettings.removeAppearanceListener(appearanceListener)
@@ -634,12 +596,29 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private var routedLauncherButton = 0
     private var routedLauncherDownAt = 0L
     private val desktopLongPress = DesktopLongPress()
+    private var homePressX = 0
+    private var homePressY = 0
+    private var homePressDownAt = 0L
+    private val remoteHomePress = Runnable {
+        if (!isFinishing && !isDestroyed && desktopAt(homePressX, homePressY)) {
+            dispatchLauncherTouch(root, homePressX, homePressY, MotionEvent.ACTION_CANCEL, homePressDownAt)
+            showHomeMenu()
+        }
+    }
     private var nativeDesktopSecondary = false
     private var secondaryDownX = 0
     private var secondaryDownY = 0
     private var secondaryCancelled = false
 
     private fun longPressDesktop(x: Int, y: Int) {
+        if (omaDesktop?.homeMenu() == true) {
+            setLauncherActive(true)
+            return
+        }
+        if (sharedDesktop) {
+            showHomeMenu()
+            return
+        }
         val capturedRoot = root
         val capturedDesktop = launcher
         val capturedLease = launcherLease
@@ -652,6 +631,22 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (sharedDesktop) when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                root.removeCallbacks(remoteHomePress)
+                homePressX = event.rawX.toInt()
+                homePressY = event.rawY.toInt()
+                homePressDownAt = event.downTime
+                if (desktopAt(homePressX, homePressY))
+                    root.postDelayed(remoteHomePress, android.view.ViewConfiguration.getLongPressTimeout().toLong() - 50L)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val slop = android.view.ViewConfiguration.get(this).scaledTouchSlop
+                if (kotlin.math.abs(event.rawX.toInt() - homePressX) > slop ||
+                    kotlin.math.abs(event.rawY.toInt() - homePressY) > slop) root.removeCallbacks(remoteHomePress)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> root.removeCallbacks(remoteHomePress)
+        }
         if (!phoneViewSession && handleWindowDrag(event.rawX.toInt(), event.rawY.toInt(), event.actionMasked,
                 if (event.buttonState and MotionEvent.BUTTON_SECONDARY != 0) MotionEvent.BUTTON_SECONDARY else MotionEvent.BUTTON_PRIMARY)) return true
         if (nativeLauncherOutside || (event.actionMasked == MotionEvent.ACTION_DOWN &&
@@ -682,7 +677,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
                 return true
             }
             if (event.actionMasked == MotionEvent.ACTION_DOWN && event.buttonState == MotionEvent.BUTTON_PRIMARY) {
-                // Native mouse DOWN can be consumed by either HorizontalScrollView.
+                // Native mouse DOWN can be consumed by a child surface.
                 // Hover targets are shell-owned controls only; hosted app surfaces are
                 // deliberately not registered, so their native input remains untouched.
                 val target = if (::root.isInitialized)
@@ -742,7 +737,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
                 if (!launcherActive && super.dispatchGenericMotionEvent(event)) {
                     return true
                 }
-                scrollWorkspace(wheel)
+                routeWorkspaceScroll(wheel)
                 return true
             }
         }
@@ -1029,84 +1024,12 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         shell.addView(toolbar, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, uiDp(26),
         ))
-        workspaceScroll = DesktopWorkspaceScrollView(this) { x, y ->
+        workspaceSurface = DesktopWorkspaceView(this) { x, y ->
             omaDesktop == null || windowAt(x, y)
-        }.apply {
-            isHorizontalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
-            isFillViewport = true
         }
         taskStrip = FrameLayout(this)
-        workspaceScroll.addView(taskStrip, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        shell.addView(workspaceScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-
-        taskbar = FrameLayout(this).apply {
-            // Keep overflow controls flush with the external-display edges. The navigation
-            // row already reserves their width when visible, so an outer inset would make the
-            // arrows miss the cursor when it is parked at the far left or right edge.
-            setPadding(0, 0, 0, 0)
-            setBackgroundColor(InputSettings.theme.background)
-        }
-        taskbarScroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
-            // Keep the tab row wrap-content so its configured alignment remains meaningful
-            // when it does not overflow.
-            isFillViewport = false
-        }
-        taskbarContent = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        taskTabs = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        taskbarContent.addView(taskTabs, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT,
-        ))
-        taskbarScroll.addView(taskbarContent, FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT,
-        ))
-        fun taskbarStepButton(symbol: String, description: String, direction: Int) =
-            label(symbol, 20f, ACCENT, bold = true).apply {
-                gravity = Gravity.CENTER
-                contentDescription = description
-                visibility = View.GONE
-                setBeastClick { scrollTaskbarBy(direction) }
-            }
-        taskbarPrevious = taskbarStepButton("‹", "Show earlier task tabs", -1)
-        taskbarNext = taskbarStepButton("›", "Show later task tabs", 1)
-        val taskbarNavigation = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            addView(taskbarPrevious, LinearLayout.LayoutParams(
-                uiDp(TASKBAR_STEP_CONTROL_WIDTH_DP),
-                ViewGroup.LayoutParams.MATCH_PARENT,
-            ))
-            addView(taskbarScroll, LinearLayout.LayoutParams(
-                0,
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                1f,
-            ))
-            addView(taskbarNext, LinearLayout.LayoutParams(
-                uiDp(TASKBAR_STEP_CONTROL_WIDTH_DP),
-                ViewGroup.LayoutParams.MATCH_PARENT,
-            ))
-        }
-        taskbar.addView(taskbarNavigation, FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-        ))
-        taskbarShell = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(InputSettings.theme.darkBackground)
-        }
-        taskbarShell.addView(taskbar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        viewportMap = ViewportMapView(this)
-        taskbarShell.addView(viewportMap, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, uiDp(2)))
-        taskbarShell.visibility = if (phoneViewSession) View.VISIBLE else View.GONE
-        shell.addView(taskbarShell, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, if (phoneViewSession) uiDp(TASKBAR_HEIGHT_DP) else 0))
+        workspaceSurface.addView(taskStrip, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        shell.addView(workspaceSurface, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         aspectLayer.addView(shell, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         fullscreenLayer = FrameLayout(this).apply {
@@ -1135,7 +1058,6 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         // Keep the home below app tiles, with menus raised only while active.
         aspectLayer.addView(launcher, 0, FrameLayout.LayoutParams(-1, -1).apply {
             topMargin = uiDp(26)
-            bottomMargin = if (phoneViewSession) uiDp(TASKBAR_HEIGHT_DP) else 0
         })
         cursorOverlay = BeastCursorOverlay(this)
         cursorOverlay.translationZ = 2f
@@ -1155,20 +1077,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             keepCursorOnTop()
         }
 
-        workspaceScroll.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateTaskSizes() }
-        workspaceScroll.setOnScrollChangeListener { _, scrollX, _, _, _ ->
-            if (!phoneViewSession && WorkspaceState.visibleTasks().any { it.floating || it.pinned || it.workspace == 0 }) updateTaskSizes()
-            viewportMap.scrollOffsetPx = scrollX
-            syncViewportMap()
-            val maxScroll = (taskStrip.width - workspaceScroll.width).coerceAtLeast(1)
-            WorkspaceState.setViewportPosition(scrollX.toFloat() / maxScroll)
-        }
-        taskbarScroll.setOnScrollChangeListener { _, _, _, _, _ ->
-            updateTaskbarOverflowControls()
-        }
-        taskbarScroll.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-            updateTaskbarOverflowControls()
-        }
+        workspaceSurface.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateTaskSizes() }
     }
 
     private fun enterImmersiveMode() {
@@ -1202,15 +1111,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         uiFontScale = nextFontScale
         if (::root.isInitialized) root.setBackgroundColor(InputSettings.theme.darkerBackground)
         if (::toolbar.isInitialized) toolbar.setBackgroundColor(InputSettings.theme.background)
-        if (::taskbar.isInitialized) taskbar.setBackgroundColor(InputSettings.theme.background)
-        if (::taskbarShell.isInitialized) taskbarShell.setBackgroundColor(InputSettings.theme.background)
         workspaceMenu?.dismiss()
-        if (::viewportMap.isInitialized) viewportMap.invalidate()
         cards.values.forEach(BeastTaskCard::refreshAccent)
-        if (::taskbarPrevious.isInitialized) {
-            taskbarPrevious.setTextColor(InputSettings.accentColor)
-            taskbarNext.setTextColor(InputSettings.accentColor)
-        }
         refreshBeastHoverAppearance()
         if (::launcherPanel.isInitialized) applyLauncherBorder()
         if ((elementScaleChanged || fontScaleChanged) && ::root.isInitialized) {
@@ -1274,8 +1176,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         // once again spans the full physical display.
         val effectiveInputScale = correction * targetLayerWidth / root.width.toFloat()
         WorkspaceCursor.publishHorizontalTransform(display?.displayId ?: -1, effectiveInputScale)
-        if (geometryChanged && ::workspaceScroll.isInitialized) {
-            workspaceScroll.post(::updateTaskSizes)
+        if (geometryChanged && ::workspaceSurface.isInitialized) {
+            workspaceSurface.post(::updateTaskSizes)
         }
     }
 
@@ -1319,13 +1221,11 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         }
     }
 
-    private fun renderWorkspace(revealFocusedTask: Boolean = false) {
+    private fun renderWorkspace() {
         val tasks = WorkspaceState.tasks
         // An explicit launcher request becomes visible immediately, then receives its
         // Android task ID during reconciliation. Baseline imports remain PHONE/minimized.
-        val shownTasks = if (phoneViewSession) tasks.filter {
-            it.placement == TaskPlacement.BEAST_VISIBLE || it.placement == TaskPlacement.PENDING_BEAST
-        } else WorkspaceState.visibleTasks()
+        val shownTasks = WorkspaceState.visibleTasks()
         if (shownTasks.isEmpty()) desktopFocused = true
         val liveIds = tasks.mapTo(hashSetOf()) { it.id }
         cards.keys.filterNot(liveIds::contains).forEach { id ->
@@ -1353,8 +1253,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             it.id == WorkspaceState.focusedTaskId && it.mode == PresentationMode.FULLSCREEN
         }
         if (fullscreen != null) {
-            workspaceScroll.visibility = View.GONE
-            taskbarShell.visibility = View.GONE
+            workspaceSurface.visibility = View.GONE
             fullscreenLayer.visibility = View.VISIBLE
             val card = cards.getValue(fullscreen.id)
             card.setFullscreen(true)
@@ -1366,8 +1265,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         } else {
             fullscreenLayer.removeAllViews()
             fullscreenLayer.visibility = View.GONE
-            workspaceScroll.visibility = View.VISIBLE
-            taskbarShell.visibility = if (phoneViewSession) View.VISIBLE else View.GONE
+            workspaceSurface.visibility = View.VISIBLE
             shownTasks.forEachIndexed { index, task ->
                 val card = cards.getValue(task.id)
                 card.setFullscreen(false)
@@ -1380,10 +1278,8 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
                 }
             }
             updateTaskSizes()
-            if (revealFocusedTask) revealFocusedTask()
-            taskStrip.post(::syncViewportMap)
         }
-        renderTaskbar(tasks)
+        renderToolbar()
         renderWorkspaceTabs()
     }
 
@@ -1453,173 +1349,30 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun updateTaskSizes() {
-        if (!phoneViewSession) {
-            val width = workspaceScroll.width
-            val height = workspaceScroll.height
-            if (width <= 0 || height <= 0) return
-            val bounds = WorkspaceState.windowBounds(width, height, dp(10), dp(10))
-            val contentWidth = maxOf(width, bounds.values.maxOfOrNull { it.right + dp(10) } ?: width)
-            if (taskStrip.layoutParams.width != contentWidth) taskStrip.layoutParams = taskStrip.layoutParams.apply { this.width = contentWidth }
-            bounds.forEach { (id, box) ->
-                val card = cards[id] ?: return@forEach
-                if (card.parent !== taskStrip) return@forEach
-                val current = card.layoutParams as? FrameLayout.LayoutParams
-                val task = WorkspaceState.tasks.firstOrNull { it.id == id }
-                val x = box.x + if (WorkspaceState.layout() == WorkspaceLayout.SCROLLING && task?.let { it.floating || it.pinned || it.workspace == 0 } == true) workspaceScroll.scrollX else 0
-                if (current?.width != box.width || current.height != box.height || current.leftMargin != x || current.topMargin != box.y) {
-                    card.layoutParams = FrameLayout.LayoutParams(box.width, box.height).apply { leftMargin = x; topMargin = box.y }
+        val width = workspaceSurface.width
+        val height = workspaceSurface.height
+        if (width <= 0 || height <= 0) return
+        val bounds = WorkspaceState.windowBounds(width, height, dp(10), dp(10))
+        bounds.forEach { (id, box) ->
+            val card = cards[id] ?: return@forEach
+            if (card.parent !== taskStrip) return@forEach
+            val current = card.layoutParams as? FrameLayout.LayoutParams
+            if (current?.width != box.width || current.height != box.height ||
+                current.leftMargin != box.x || current.topMargin != box.y) {
+                card.layoutParams = FrameLayout.LayoutParams(box.width, box.height).apply {
+                    leftMargin = box.x; topMargin = box.y
                 }
             }
-            WorkspaceState.visibleTasks().filter { it.floating || it.pinned || it.workspace == 0 }.forEach { cards[it.id]?.bringToFront() }
-            WorkspaceState.tasks.firstOrNull { it.id == WorkspaceState.focusedTaskId && (it.floating || it.pinned || it.maximized || it.workspace == 0) }?.let { cards[it.id]?.bringToFront() }
-            if (WorkspaceState.layout() == WorkspaceLayout.DWINDLE) workspaceScroll.scrollTo(0, 0)
-            return
         }
-        val cardHeight = workspaceScroll.height - taskStrip.paddingTop - taskStrip.paddingBottom
-        val appContentHeight = cardHeight - (dp(APP_DECORATOR_HEIGHT_DP) * uiElementScale.coerceIn(.85f, 1.15f)).roundToInt() -
-            dp(OMARCHY_WINDOW_BORDER_DP) * 2
-        if (appContentHeight <= 0) return
-        // Derive width from the actual app surface height remaining after the unified
-        // UI/text scale has laid out the toolbar, taskbar, strip padding, and decorator.
-        val profile = displayProfile()
-        val border = dp(OMARCHY_WINDOW_BORDER_DP) * 2
-        val phoneWidth = (appContentHeight * profile.phoneAspect).roundToInt().coerceAtLeast(1) + border
-        val tabletWidth = (appContentHeight * profile.tabletAspect).roundToInt().coerceAtLeast(1) + border
-        var left = dp(8)
-        WorkspaceState.tasks.filter {
-            it.placement == TaskPlacement.BEAST_VISIBLE ||
-                it.placement == TaskPlacement.PENDING_BEAST
-        }.forEach { task ->
-            val card = cards[task.id] ?: return@forEach
-            val width = if (task.mode == PresentationMode.PHONE) phoneWidth else tabletWidth
-            val margin = dp(12)
-            val current = card.layoutParams as? FrameLayout.LayoutParams
-            if (current?.width == width &&
-                current.height == ViewGroup.LayoutParams.MATCH_PARENT &&
-                current.leftMargin == left
-            ) return@forEach
-            card.layoutParams = FrameLayout.LayoutParams(
-                width,
-                cardHeight,
-            ).apply { leftMargin = left }
-            left += width + margin
-        }
-        taskStrip.layoutParams = taskStrip.layoutParams.apply { width = left }
+        WorkspaceState.visibleTasks().filter { it.floating || it.pinned || it.workspace == 0 }
+            .forEach { cards[it.id]?.bringToFront() }
+        WorkspaceState.tasks.firstOrNull {
+            it.id == WorkspaceState.focusedTaskId && (it.floating || it.pinned || it.maximized || it.workspace == 0)
+        }?.let { cards[it.id]?.bringToFront() }
     }
 
-    private fun revealFocusedTask() {
-        val card = cards[WorkspaceState.focusedTaskId] ?: return
-        workspaceScroll.post {
-            if (card.parent !== taskStrip || card.width <= 0) return@post
-            val viewportLeft = workspaceScroll.scrollX
-            val viewportRight = viewportLeft + workspaceScroll.width
-            val margin = dp(12)
-            val target = when {
-                card.left < viewportLeft + margin -> card.left - margin
-                card.right > viewportRight - margin -> card.right - workspaceScroll.width + margin
-                else -> return@post
-            }
-            val maxScroll = (taskStrip.width - workspaceScroll.width).coerceAtLeast(0)
-            workspaceScroll.smoothScrollTo(target.coerceIn(0, maxScroll), 0)
-        }
-    }
 
-    private fun renderTaskbar(tasks: List<BeastTask>) {
-        (taskbarContent.layoutParams as FrameLayout.LayoutParams).gravity = alignmentGravity(
-            InputSettings.taskbarAlignment,
-        )
-        taskTabs.removeAllViews()
-        tasks.forEachIndexed { index, task ->
-            val focused = WorkspaceState.focusedTaskId == task.id
-            val numberColor = if (focused) ACCENT else InputSettings.theme.lightForeground
-            val labelColor = InputSettings.theme.foreground
-            val number = label("%02d".format(index + 1), 11f, numberColor, bold = focused).apply {
-                gravity = Gravity.CENTER; setPadding(uiDp(7), 0, uiDp(7), 0)
-            }
-            val title = label(task.shortLabel.uppercase(Locale.getDefault()), TASKBAR_TEXT_SIZE, labelColor, bold = focused).apply {
-                gravity = Gravity.CENTER
-                maxLines = 1
-                maxEms = TASKBAR_LABEL_CHARACTERS
-                ellipsize = TextUtils.TruncateAt.END
-            }
-            val state = when {
-                !task.supportsMultiWindow -> "PHONE"
-                task.minimized -> "—"
-                else -> task.mode.marker
-            }
-            val badge = label(state, 10f, InputSettings.theme.lightForeground).apply {
-                gravity = Gravity.CENTER; setPadding(uiDp(8), 0, uiDp(7), 0)
-            }
-            LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER
-                background = desktopTabBackground(focused, resources.displayMetrics.density)
-                isClickable = true
-                isFocusable = true
-                contentDescription = "Task ${index + 1}, ${task.label}, ${if (task.minimized) "minimized" else state}${if (focused) ", focused" else ""}"
-                tooltipText = contentDescription
-                addView(number, LinearLayout.LayoutParams(-2, -1))
-                addView(title, LinearLayout.LayoutParams(-2, -1))
-                addView(badge, LinearLayout.LayoutParams(-2, -1))
-                setBeastClick("task:${task.id}") { focusTask(task) }
-                installBeastHover(listOf(number to { numberColor }, title to { labelColor }, badge to { InputSettings.theme.lightForeground }))
-                taskTabs.addView(this, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, uiDp(32)).apply {
-                    marginEnd = uiDp(4)
-                })
-            }
-        }
-        if (tasks.isEmpty()) taskTabs.addView(label("  WORKSPACE READY  ·  +APPS TO BEGIN", 11f, InputSettings.theme.lightForeground).apply {
-            gravity = Gravity.CENTER_VERTICAL; setBeastClick(::showLauncher)
-            contentDescription = "Workspace empty. Open apps"
-        }, LinearLayout.LayoutParams(-2, -1))
-        taskbarScroll.post(::updateTaskbarOverflowControls)
-        renderToolbar()
-    }
-
-    /** Shows edge controls only when tabs continue beyond the visible taskbar viewport. */
-    private fun updateTaskbarOverflowControls() {
-        if (!::taskbarScroll.isInitialized || taskbarScroll.width <= 0) return
-        val overflowing = taskbarContent.width > taskbarScroll.width
-        val contentParams = taskbarContent.layoutParams as? FrameLayout.LayoutParams
-        val expectedGravity = if (overflowing) {
-            Gravity.START or Gravity.CENTER_VERTICAL
-        } else {
-            alignmentGravity(InputSettings.taskbarAlignment)
-        }
-        if (contentParams != null && contentParams.gravity != expectedGravity) {
-            contentParams.gravity = expectedGravity
-            taskbarContent.layoutParams = contentParams
-            taskbarContent.post(::updateTaskbarOverflowControls)
-            return
-        }
-        val firstTab = taskTabs.getChildAt(0)
-        val lastTab = taskTabs.getChildAt(taskTabs.childCount - 1)
-        val contentOffset = taskbarContent.left - taskbarScroll.scrollX
-        val firstTabStart = firstTab?.left?.plus(contentOffset) ?: 0
-        val lastTabEnd = lastTab?.right?.plus(contentOffset) ?: 0
-        val canShowEarlier = overflowing && firstTabStart < 0
-        val canShowLater = overflowing && lastTabEnd > taskbarScroll.width
-        val previousVisibility = if (canShowEarlier) View.VISIBLE else View.GONE
-        val nextVisibility = if (canShowLater) View.VISIBLE else View.GONE
-        if (taskbarPrevious.visibility != previousVisibility) {
-            taskbarPrevious.visibility = previousVisibility
-        }
-        if (taskbarNext.visibility != nextVisibility) {
-            taskbarNext.visibility = nextVisibility
-        }
-    }
-
-    private fun scrollTaskbarBy(direction: Int) {
-        if (direction == 0 || taskbarScroll.width <= 0) return
-        val maxScroll = (taskbarContent.width - taskbarScroll.width).coerceAtLeast(0)
-        val step = (taskbarScroll.width * TASKBAR_SCROLL_STEP_FRACTION).roundToInt().coerceAtLeast(1)
-        taskbarScroll.smoothScrollTo(
-            (taskbarScroll.scrollX + direction * step).coerceIn(0, maxScroll),
-            0,
-        )
-    }
-
-    /** Top bar contains workspace navigation and settings; the app strip stays below. */
+    /** Top bar contains workspace navigation, launcher panes, and desktop controls. */
     private fun renderToolbar() {
         val key = ToolbarRenderKey(InputSettings.theme, uiElementScale, uiFontScale,
             resources.displayMetrics.densityDpi, omaDesktop != null, sharedDesktop)
@@ -1647,37 +1400,62 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         val trailing = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         val windows = action("≡", "Open windows · Alt+Tab", ::showWindowSwitcher)
         trailing.addView(windows, LinearLayout.LayoutParams(-2, -1))
-        val appsButton = action("⌕", "Applications · Super+A", ::showLauncher)
+        val appsButton = action("▦", "Applications · Super+D", ::showAppsPane)
         trailing.addView(appsButton, LinearLayout.LayoutParams(-2, -1))
+        val widgetsButton = action("▤", "Omalauncher widgets", ::showWidgetsPane)
+        trailing.addView(widgetsButton, LinearLayout.LayoutParams(-2, -1))
+        val searchButton = action("⌕", "Search apps or ask an agent · Super+A", ::showLauncher)
+        trailing.addView(searchButton, LinearLayout.LayoutParams(-2, -1))
         shellIndicators = action(systemIndicatorsText(), "Network, battery and desktop settings", ::showInputSettings)
         trailing.addView(shellIndicators, LinearLayout.LayoutParams(-2, -1))
-        optional += listOf(windows, appsButton, shellIndicators)
+        optional += listOf(windows, appsButton, widgetsButton, searchButton, shellIndicators)
         systemStatus = label(systemStatusText(), TOOLBAR_TEXT_SIZE, InputSettings.theme.brightForeground).apply {
             gravity = Gravity.CENTER
             contentDescription = "Day and time"
             maxLines = 1
+            maxEms = 28
+            ellipsize = TextUtils.TruncateAt.END
         }
         toolbar.addView(DesktopBarLayout(this, controls, systemStatus, trailing, optional), FrameLayout.LayoutParams(-1, -1))
+        renderSearchStatus()
         renderWorkspaceTabs()
+    }
+
+    private fun renderSearchStatus() {
+        if (!::systemStatus.isInitialized) return
+        if (LauncherSearchSession.active) {
+            val query = LauncherSearchSession.query
+            systemStatus.text = "⌕  ${query.ifBlank { "search / agent" }}"
+            systemStatus.contentDescription = "Omalauncher search${if (query.isBlank()) "" else ": $query"}"
+            systemStatus.setTextColor(ACCENT)
+            systemStatus.setPadding(uiDp(10), 0, uiDp(10), 0)
+            systemStatus.background = desktopTabBackground(true, resources.displayMetrics.density)
+        } else {
+            systemStatus.text = systemStatusText()
+            systemStatus.contentDescription = "Day and time"
+            systemStatus.setTextColor(InputSettings.theme.brightForeground)
+            systemStatus.setPadding(0, 0, 0, 0)
+            systemStatus.background = null
+        }
     }
 
     private fun renderWorkspaceTabs() {
         if (!::workspaceTabs.isInitialized) return
         val occupied = WorkspaceState.tasks.filter { it.placement != TaskPlacement.PHONE }.map { it.workspace }.filter { it in 1..10 }.toSet()
         val workspaces = ((1..5).toList() + occupied + WorkspaceState.activeWorkspace).distinct().sorted()
-        val key = "${WorkspaceState.activeWorkspace}:${WorkspaceState.layout()}:$occupied:${InputSettings.theme.id}:$uiElementScale"
+        val key = "${WorkspaceState.activeWorkspace}:$occupied:${InputSettings.theme.id}:$uiElementScale"
         if (workspaceTabsKey == key) return
         workspaceTabsKey = key
         workspaceTabs.removeAllViews()
         workspaces.forEach { number ->
             val active = number == WorkspaceState.activeWorkspace
-            val symbol = if (active) if (WorkspaceState.layout() == WorkspaceLayout.DWINDLE) " ▣" else " ⇥" else ""
+            val symbol = if (active) " ▣" else ""
             workspaceTabs.addView(label("$number$symbol", TOOLBAR_TEXT_SIZE, if (active) ACCENT else if (number in occupied) InputSettings.theme.foreground else InputSettings.theme.muted).apply {
                 gravity = Gravity.CENTER; setPadding(uiDp(7), 0, uiDp(7), 0)
                 setSingleLine(true); includeFontPadding = false
-                contentDescription = "Workspace $number${if (active) ", ${WorkspaceState.layout().name.lowercase()}, active" else ""}"
-                tooltipText = if (active) "Cycle workspace layout · Super+L" else "Switch workspace · Super+$number"
-                setBeastClick("workspace:$number") { if (active) WorkspaceState.toggleLayout() else WorkspaceState.switchWorkspace(number) }
+                contentDescription = "Workspace $number${if (active) ", active" else ""}"
+                tooltipText = "Switch workspace · Super+$number"
+                setBeastClick("workspace:$number") { WorkspaceState.switchWorkspace(number) }
             }, LinearLayout.LayoutParams(-2, -1))
         }
     }
@@ -1691,10 +1469,11 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         if (shortcut.command != OmarchyCommand.MENU) workspaceMenu?.dismiss()
         if (shortcut.command != OmarchyCommand.MENU && shortcut.command != OmarchyCommand.APPS && launcherActive) hideLauncher()
         val task = WorkspaceState.tasks.firstOrNull { it.id == WorkspaceState.focusedTaskId }
-        val geometry = WorkspaceState.windowBounds(workspaceScroll.width.coerceAtLeast(1), workspaceScroll.height.coerceAtLeast(1), dp(10), dp(10))
+        val geometry = WorkspaceState.windowBounds(workspaceSurface.width.coerceAtLeast(1), workspaceSurface.height.coerceAtLeast(1), dp(10), dp(10))
         when (shortcut.command) {
             OmarchyCommand.MENU -> if (workspaceMenu?.isShowing == true) workspaceMenu?.dismiss() else showWorkspaceMenu()
-            OmarchyCommand.APPS -> showLauncher()
+            OmarchyCommand.SEARCH -> showLauncher()
+            OmarchyCommand.APPS -> showAppsPane()
             OmarchyCommand.TERMINAL -> launchRoleApp("terminal")
             OmarchyCommand.BROWSER -> launchRoleApp("browser")
             OmarchyCommand.FILES -> launchRoleApp("files")
@@ -1703,7 +1482,6 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             OmarchyCommand.FULLSCREEN -> task?.let { WorkspaceState.setMode(it.id, if (it.mode == PresentationMode.FULLSCREEN) it.fullscreenReturnMode ?: PresentationMode.TABLET else PresentationMode.FULLSCREEN) }
             OmarchyCommand.FLOAT -> task?.let { WorkspaceState.toggleFloating(it.id) }
             OmarchyCommand.PIN -> task?.let { WorkspaceState.toggleFloating(it.id, pin = true) }
-            OmarchyCommand.LAYOUT -> WorkspaceState.toggleLayout()
             OmarchyCommand.SPLIT -> WorkspaceState.toggleSplit()
             OmarchyCommand.FOCUS, OmarchyCommand.SWAP -> shortcut.direction?.let { direction ->
                 if (WorkspaceState.focusDirectional(direction, geometry, shortcut.command == OmarchyCommand.SWAP)) {
@@ -1722,7 +1500,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             OmarchyCommand.SCRATCHPAD -> WorkspaceState.toggleScratchpad()
             OmarchyCommand.MOVE_SCRATCHPAD -> task?.let { WorkspaceState.moveToWorkspace(it.id, 0, follow = false) }
             OmarchyCommand.RESIZE -> WorkspaceState.resizeFocused(shortcut.horizontal, shortcut.argument.toFloat() /
-                (if (shortcut.horizontal) workspaceScroll.width else workspaceScroll.height).coerceAtLeast(1))
+                (if (shortcut.horizontal) workspaceSurface.width else workspaceSurface.height).coerceAtLeast(1))
             OmarchyCommand.GROUP -> task?.let { WorkspaceState.toggleGroup(it.id) }
             OmarchyCommand.UNGROUP -> task?.let { WorkspaceState.toggleGroup(it.id, detach = true) }
             OmarchyCommand.GROUP_FOCUS -> WorkspaceState.focusGroup(if (shortcut.silent) 0 else shortcut.argument, if (shortcut.silent) shortcut.argument else null)
@@ -1747,17 +1525,17 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun handleWindowDrag(x: Int, y: Int, action: Int, button: Int): Boolean {
-        if (!::workspaceScroll.isInitialized || launcherActive || TransientPanelCoordinator.isActiveOnDisplay(display?.displayId ?: -1)) return false
+        if (!::workspaceSurface.isInitialized || launcherActive || TransientPanelCoordinator.isActiveOnDisplay(display?.displayId ?: -1)) return false
         val viewport = Rect()
-        if (!workspaceScroll.getGlobalVisibleRect(viewport) || viewport.width() <= 0 || viewport.height() <= 0) return false
-        if (action == MotionEvent.ACTION_DOWN && (OmarchyShortcuts.superHeld ||
-                visibleCardsTopFirst().firstOrNull { candidate -> val bounds = Rect(); candidate.getGlobalVisibleRect(bounds) && bounds.contains(x, y) }?.isTitleHit(x, y) == true)) {
+        if (!workspaceSurface.getGlobalVisibleRect(viewport) || viewport.width() <= 0 || viewport.height() <= 0) return false
+        if (action == MotionEvent.ACTION_DOWN) {
             val card = visibleCardsTopFirst().firstOrNull { candidate -> val rect = Rect(); candidate.getGlobalVisibleRect(rect) && rect.contains(x, y) } ?: return false
+            if (!OmarchyShortcuts.superHeld && !card.isTitleHit(x, y) && !card.isResizeHit(x, y)) return false
             val task = cards.entries.firstOrNull { it.value === card }?.key ?: return false
             val rect = Rect(); card.getGlobalVisibleRect(rect)
             val box = WindowBounds(rect.left - viewport.left, rect.top - viewport.top, rect.width(), rect.height())
             val info = WorkspaceState.tasks.first { it.id == task }
-            val resize = button == MotionEvent.BUTTON_SECONDARY
+            val resize = button == MotionEvent.BUTTON_SECONDARY || card.isResizeHit(x, y)
             val floating = info.floating || info.pinned || info.workspace == 0
             val targets = if (!floating && !resize) visibleCardsTopFirst().mapNotNull { candidate ->
                 val id = cards.entries.firstOrNull { it.value === candidate }?.key ?: return@mapNotNull null
@@ -1795,7 +1573,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
                 if (!drag.detached || action == MotionEvent.ACTION_CANCEL || target != null)
                     WorkspaceState.finishTileDrag(drag.id, target, drag.savedLayout)
                 else WorkspaceState.commitGeometry()
-            } else WorkspaceState.commitGeometry()
+            } else WorkspaceState.commitGeometry(if (drag.resize && drag.wasFloating) drag.id else null)
         }
         return true
     }
@@ -1821,15 +1599,15 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     private fun showWorkspaceMenu() {
         hideLauncher()
         val commands = buildList {
-            add(WorkspaceCommand("APPLICATIONS", "Launch an Android app · Super+A", run = ::showLauncher))
+            add(WorkspaceCommand("APPLICATIONS", "Omalauncher app pane · Super+D", run = ::showAppsPane))
+            add(WorkspaceCommand("SEARCH / AGENT", "Omalauncher prompt · Super+A", run = ::showLauncher))
             add(WorkspaceCommand("TERMINAL", "Open an installed terminal · Super+Return") { launchRoleApp("terminal") })
             add(WorkspaceCommand("BROWSER", "Open your Android browser · Super+Shift+Return") { launchRoleApp("browser") })
-            add(WorkspaceCommand("WORKSPACE LAYOUT", "${WorkspaceState.layout().name.lowercase()} · Super+L") { WorkspaceState.toggleLayout() })
             add(WorkspaceCommand("WINDOWS", "Find a window on any workspace", run = ::showWindowSwitcher))
             add(WorkspaceCommand("WINDOW CONTROLS", "Floating, fullscreen, grouping and workspace moves", WorkspaceState.focusedTaskId != null) { cards[WorkspaceState.focusedTaskId]?.onWindowMenu?.invoke() })
             add(WorkspaceCommand("SCRATCHPAD", "Show or hide the scratchpad · Super+S") { WorkspaceState.toggleScratchpad() })
             if (omaDesktop != null) {
-                add(WorkspaceCommand("WIDGETS", "Add widgets from Omalauncher") { setLauncherActive(true); omaDesktop?.widgets() })
+                add(WorkspaceCommand("WIDGETS", "Add widgets from Omalauncher", run = ::showWidgetsPane))
                 add(WorkspaceCommand("THEMES", if (sharedDesktop) "Change the theme in Omalauncher on the phone" else "One palette for your home and workspace", enabled = !sharedDesktop) { setLauncherActive(true); omaDesktop?.themes() })
             }
             add(WorkspaceCommand("SHOW ALL", "Restore windows in their existing order", WorkspaceState.tasks.isNotEmpty()) { showAllTasks() })
@@ -1844,6 +1622,21 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             add(WorkspaceCommand("CLOSE ALL…", "Close Android tasks · confirmation required", WorkspaceState.tasks.isNotEmpty(), true) { confirmCloseAllTasks() })
         }
         showCommands("OMARCHY", "${InputSettings.theme.name} · workspace ${WorkspaceState.activeWorkspace} · Super+Space", commands)
+    }
+
+    private fun showHomeMenu() {
+        if (omaDesktop?.homeMenu() == true) {
+            setLauncherActive(true)
+            return
+        }
+        // The released bridge exposes its app and widget panes, but has no home-menu
+        // action. Keep the host menu useful without sending an unsupported command.
+        omaDesktop?.dismissPanels()
+        showCommands("OMALAUNCHER HOME", "Home actions", listOf(
+            WorkspaceCommand("WIDGET STORE", "Browse Omalauncher widgets", run = ::showWidgetsPane),
+            WorkspaceCommand("APPLICATIONS", "Browse Omalauncher apps", run = ::showAppsPane),
+            WorkspaceCommand("THEMES", "Change themes in Omalauncher on the phone", enabled = false) {},
+        ))
     }
 
     private fun showCommands(title: String, subtitle: String, commands: List<WorkspaceCommand>) {
@@ -1878,18 +1671,6 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
                 } ?: "OFF"
         }.getOrDefault("OFF")
         return "$network · ${percent?.let { "$it%" } ?: "--%"}"
-    }
-
-    private fun alignmentGravity(alignment: BarAlignment) = when (alignment) {
-        BarAlignment.LEFT -> Gravity.START or Gravity.CENTER_VERTICAL
-        BarAlignment.CENTER -> Gravity.CENTER
-        BarAlignment.RIGHT -> Gravity.END or Gravity.CENTER_VERTICAL
-    }
-
-    private fun syncViewportMap() {
-        viewportMap.viewportWidthPx = workspaceScroll.width
-        viewportMap.contentWidthPx = taskStrip.width.coerceAtLeast(workspaceScroll.width)
-        viewportMap.scrollOffsetPx = workspaceScroll.scrollX
     }
 
     /** Fallback for the rare case Android initially places the workspace on the phone. */
@@ -2044,57 +1825,11 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         }
     }
 
-    private fun scrollWorkspace(wheel: Float) {
-        if (omaDesktop != null && launcherActive) {
-            val position = WorkspaceCursor.position()
-            routeAppScroll(display?.displayId ?: -1,
-                (position.xFraction * root.width).toInt(),
-                (position.yFraction * root.height).toInt(), wheel)
-            return
-        }
-        val targetsLauncher = launcherActive
-        val direction = if (InputSettings.invertScrollbarScroll) -1f else 1f
-        val distance = if (targetsLauncher) {
-            direction * wheel * dp(96)
-        } else {
-            // The desktop's visible viewport is a horizontal task strip; use a
-            // vertical wheel/PhoneUI edge-scroll gesture to pan it.
-            direction * wheel * workspaceScroll.width * .32f
-        }
-        val now = SystemClock.uptimeMillis()
-        val elapsed = (now - lastScrollAt).coerceIn(1L, 120L)
-        val sampleVelocity = distance * 1000f / elapsed
-        momentumVelocity = if (now - lastScrollAt > 160L) {
-            sampleVelocity
-        } else {
-            momentumVelocity * .55f + sampleVelocity * .45f
-        }
-        lastScrollAt = now
-        momentumTargetsLauncher = targetsLauncher
-        scrollMomentum.forceFinished(true)
-        root.removeCallbacks(momentumKick)
-
-        if (targetsLauncher) {
-            launcherScroll.scrollBy(0, distance.toInt())
-        } else {
-            workspaceScroll.scrollBy(distance.toInt(), 0)
-        }
-        if (InputSettings.momentumEnabled) {
-            root.postDelayed(momentumKick, MOMENTUM_DELAY_MS)
-        }
-    }
-
-    private fun startMomentum() {
-        if (!InputSettings.momentumEnabled) return
-        if (kotlin.math.abs(momentumVelocity) < MIN_FLING_VELOCITY) return
-        if (momentumTargetsLauncher) {
-            val maxY = ((launcherScroll.getChildAt(0)?.height ?: 0) - launcherScroll.height).coerceAtLeast(0)
-            scrollMomentum.fling(0, launcherScroll.scrollY, 0, momentumVelocity.toInt(), 0, 0, 0, maxY)
-        } else {
-            val maxX = (taskStrip.width - workspaceScroll.width).coerceAtLeast(0)
-            scrollMomentum.fling(workspaceScroll.scrollX, 0, momentumVelocity.toInt(), 0, 0, maxX, 0, 0)
-        }
-        root.postOnAnimation(momentumFrame)
+    private fun routeWorkspaceScroll(wheel: Float) {
+        val position = WorkspaceCursor.position()
+        routeAppScroll(display?.displayId ?: -1,
+            (position.xFraction * root.width).toInt(),
+            (position.yFraction * root.height).toInt(), wheel)
     }
 
     private fun buildLauncher(): FrameLayout {
@@ -2181,9 +1916,21 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun showLauncher() {
-        showLegacyLauncher()
+        showLegacyLauncher(searchPhone = true)
         setLauncherActive(true)
         root.post { if (launcherActive) omaDesktop?.search(LauncherSearchSession.query, false) }
+    }
+
+    private fun showAppsPane() {
+        showLegacyLauncher(searchPhone = true)
+        setLauncherActive(true)
+        omaDesktop?.apps()
+    }
+
+    private fun showWidgetsPane() {
+        showLegacyLauncher(searchPhone = false)
+        setLauncherActive(true)
+        omaDesktop?.widgets()
     }
 
     private fun showOmaDesktop() {
@@ -2194,11 +1941,12 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         hideSystemKeyboard()
     }
 
-    private fun showLegacyLauncher() {
+    private fun showLegacyLauncher(searchPhone: Boolean) {
         // Repeated intents and appearance rebuilds must not close our own search session.
         launcherLease?.release()
         launcherLease = null
-        if (!LauncherSearchSession.active && !phoneViewSession) {
+        if (!searchPhone) LauncherSearchSession.close()
+        if (searchPhone && !LauncherSearchSession.active && !phoneViewSession) {
             launcherSubmitSequence = LauncherSearchSession.submitSequence
             LauncherSearchSession.begin()
             // REDMAGIC otherwise inherits this external display for MainActivity's
@@ -2345,7 +2093,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
                             setPadding(uiDp(12), 0, uiDp(8), 0)
                             setBeastClick {
                             launcherPreferences.recordUse(packageName)
-                            WorkspaceState.focus(task.id, reveal = true)
+                            WorkspaceState.focus(task.id)
                             hideLauncher()
                         }
                         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, uiDp(30)))
@@ -2393,7 +2141,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             return
         }
         launcherPreferences.recordUse(task.packageName)
-        WorkspaceState.focus(task.id, reveal = true)
+        WorkspaceState.focus(task.id)
     }
 
     /** Closing means terminate the Android task; minimizing is the non-destructive action. */
@@ -2591,6 +2339,14 @@ internal class BeastTaskCard(
     private lateinit var backButton: TextView
     private lateinit var windowMenuButton: TextView
     private val surface = TaskSurfaceView(context)
+    private val resizeHandle = TextView(context).apply {
+        text = "◢"
+        gravity = Gravity.CENTER
+        typeface = Typeface.MONOSPACE
+        contentDescription = "Drag to resize window"
+        tooltipText = contentDescription
+        visibility = View.GONE
+    }
     private val fullscreenExit = TextView(context)
     private val controls = mutableListOf<TextView>()
     private val controlBaseWidths = mutableMapOf<TextView, Int>()
@@ -2772,6 +2528,9 @@ internal class BeastTaskCard(
         column.addView(groupBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(22)))
         column.addView(surface, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         addView(column, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        resizeHandle.setTextColor(InputSettings.accentColor)
+        resizeHandle.setBackgroundColor(InputSettings.theme.background)
+        addView(resizeHandle, LayoutParams(dp(32), dp(32), Gravity.END or Gravity.BOTTOM))
         fullscreenExit.text = "EXIT  T"
         fullscreenExit.contentDescription = "Exit fullscreen and restore previous width"
         fullscreenExit.tooltipText = fullscreenExit.contentDescription
@@ -2791,6 +2550,7 @@ internal class BeastTaskCard(
     fun bind(task: BeastTask, focused: Boolean) {
         boundTask = task
         this.focused = focused
+        resizeHandle.visibility = if (!fullscreen && (task.floating || task.pinned || task.workspace == 0)) View.VISIBLE else View.GONE
         val members = if (task.group == null) emptyList() else WorkspaceState.tasks.filter { it.group == task.group }
         groupBar.visibility = if (omarchyChrome && !fullscreen && members.isNotEmpty()) View.VISIBLE else View.GONE
         val groupKey = "${members.map { it.id to it.label }}:${task.id}:$focused:$fontScale:${InputSettings.theme.id}"
@@ -2803,7 +2563,7 @@ internal class BeastTaskCard(
                     typeface = Typeface.MONOSPACE; textSize = 11f * fontScale
                     gravity = Gravity.CENTER; setTextColor(if (member.id == task.id) InputSettings.accentColor else InputSettings.theme.foreground)
                     contentDescription = "Group window ${member.label}"; isFocusable = true
-                    setOnClickListener { WorkspaceState.focus(member.id, reveal = true) }; installBeastHover()
+                    setOnClickListener { WorkspaceState.focus(member.id) }; installBeastHover()
                 }, LinearLayout.LayoutParams(0, -1, 1f))
             }
         }
@@ -2840,6 +2600,8 @@ internal class BeastTaskCard(
     fun refreshAccent() {
         modeButton.setTextColor(InputSettings.accentColor)
         fullscreenExit.setTextColor(InputSettings.accentColor)
+        resizeHandle.setTextColor(InputSettings.accentColor)
+        resizeHandle.setBackgroundColor(InputSettings.theme.background)
         chrome.setBackgroundColor(InputSettings.theme.background)
         appLabel.setTextColor(if (focused) InputSettings.theme.brightForeground else InputSettings.theme.foreground)
         controls.forEach { it.setTextColor(if (it.text == "×") InputSettings.theme.danger else InputSettings.theme.foreground) }
@@ -2851,11 +2613,16 @@ internal class BeastTaskCard(
     internal fun isTitleHit(x: Int, y: Int): Boolean = chrome.visibility == View.VISIBLE &&
         Rect().let { bounds -> noteNavigation.getGlobalVisibleRect(bounds) && bounds.contains(x, y) }
 
+    internal fun isResizeHit(x: Int, y: Int): Boolean = resizeHandle.visibility == View.VISIBLE &&
+        Rect().let { bounds -> resizeHandle.getGlobalVisibleRect(bounds) && bounds.contains(x, y) }
+
     fun setFullscreen(fullscreen: Boolean) {
         this.fullscreen = fullscreen
         chrome.visibility = if (fullscreen) View.GONE else View.VISIBLE
         groupBar.visibility = if (!fullscreen && omarchyChrome && boundTask?.group != null) View.VISIBLE else View.GONE
         fullscreenExit.visibility = if (fullscreen) View.VISIBLE else View.GONE
+        resizeHandle.visibility = if (!fullscreen && boundTask?.let { it.floating || it.pinned || it.workspace == 0 } == true)
+            View.VISIBLE else View.GONE
         applyWindowBorder()
     }
 
@@ -2991,6 +2758,11 @@ internal class BeastTaskCard(
             it.width = decoratorDp(96)
             it.height = decoratorDp(36)
             fullscreenExit.layoutParams = it
+        }
+        resizeHandle.layoutParams?.let {
+            it.width = decoratorDp(32)
+            it.height = decoratorDp(32)
+            resizeHandle.layoutParams = it
         }
     }
 

@@ -8,7 +8,9 @@ interface DesktopSession {
     val view: View
     fun visible(visible: Boolean)
     fun search(query: String, submit: Boolean)
+    fun apps()
     fun widgets()
+    fun homeMenu(): Boolean = false
     fun themes()
     fun dismissPanels()
     fun key(event: KeyEvent): Boolean

@@ -2,7 +2,6 @@ package com.lateral.beast
 
 import kotlin.math.abs
 
-enum class WorkspaceLayout { DWINDLE, SCROLLING }
 enum class WindowDirection { LEFT, RIGHT, UP, DOWN }
 
 internal data class WindowBounds(val x: Int, val y: Int, val width: Int, val height: Int) {
