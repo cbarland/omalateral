@@ -11,6 +11,40 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DesktopShellSettingsAndroidTest {
+    @Test fun connectingExternalDisplayOpensWorkspaceAutomatically() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val previous = DesktopShellSettings.autoStart(context)
+        val images = ImageReader.newInstance(1920, 1080, PixelFormat.RGBA_8888, 2)
+        var display: android.hardware.display.VirtualDisplay? = null
+        instrumentation.uiAutomation.adoptShellPermissionIdentity()
+        try {
+            DesktopShellSettings.setAutoStart(context, true)
+            ActivityScenario.launch(MainActivity::class.java).use {
+                display = context.getSystemService(DisplayManager::class.java).createVirtualDisplay(
+                    "VITURE Beast auto-open acceptance", 1920, 1080, 160, images.surface,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or
+                        DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY or
+                        DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION or (1 shl 10),
+                )
+                val displayId = display!!.display.displayId
+                val deadline = System.currentTimeMillis() + 10_000
+                while ((!BeastActivity.isWorkspaceVisible() ||
+                        BeastActivity.workspaceDisplayId() != displayId) &&
+                    System.currentTimeMillis() < deadline
+                ) Thread.sleep(100)
+                assertTrue("Omalateral should open on the new display",
+                    BeastActivity.isWorkspaceVisible())
+                assertEquals(displayId, BeastActivity.workspaceDisplayId())
+            }
+        } finally {
+            display?.release()
+            images.close()
+            DesktopShellSettings.setAutoStart(context, previous)
+            instrumentation.uiAutomation.dropShellPermissionIdentity()
+        }
+    }
+
     @Test fun optingForTheSystemDesktopStopsWorkspaceStartupAndDisplayOverrides() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext

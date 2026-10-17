@@ -66,6 +66,13 @@
                 android:resource="@xml/accessory_filter" />
         </activity>
         <activity
+            android:name=".ExternalDisplayLaunchActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay" />
+        <activity
             android:name=".beast.BeastActivity"
             android:excludeFromRecents="true"
             android:exported="false"
