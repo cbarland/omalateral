@@ -26,6 +26,7 @@ import com.lateral.privileged.PrivilegedService
 import com.lateral.privileged.UsbHelperLifecycleAndroidTest
 import dev.omalauncher.desktop.IDesktopHost
 import org.junit.Assert.*
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
 import java.util.concurrent.atomic.AtomicReference
@@ -33,6 +34,17 @@ import java.util.concurrent.atomic.AtomicReference
 /** Exercises Omalateral's real PhoneUI route into a separately running Omalauncher. */
 class ExternalOmaDesktopAndroidTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
+    @Test fun selectedBridgePreviewHomeIsPreferred() {
+        val context = instrumentation.targetContext
+        val providers = ExternalOmaDesktop.available(context)
+        assumeTrue("Install the bridgepreview provider fixture", "dev.omalauncher.bridgepreview" in providers)
+        val home = context.packageManager.resolveActivity(
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0,
+        )?.activityInfo?.packageName
+        assumeTrue("Select the bridgepreview fixture as Home", home == "dev.omalauncher.bridgepreview")
+        assertEquals(home, providers.first())
+    }
+
     private fun ui(work: () -> Unit) = instrumentation.runOnMainSync(work)
     private fun await(message: String, check: () -> Boolean) {
         val deadline = android.os.SystemClock.uptimeMillis() + 30_000

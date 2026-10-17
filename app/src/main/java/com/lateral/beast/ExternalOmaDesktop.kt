@@ -51,11 +51,18 @@ internal class ExternalOmaDesktop private constructor(
     companion object {
         const val ACTION = "dev.omalauncher.action.EXTERNAL_DESKTOP"
         val PACKAGES = if (com.lateral.BuildConfig.DEBUG)
-            listOf("dev.omalauncher", "dev.omalauncher.bridgepreview") else listOf("dev.omalauncher")
+            listOf("dev.omalauncher.bridgepreview", "dev.omalauncher.debug", "dev.omalauncher")
+        else listOf("dev.omalauncher.bridgepreview", "dev.omalauncher")
 
-        fun available(context: Context): List<String> = if (Build.VERSION.SDK_INT < 30) emptyList() else PACKAGES.filter { pkg ->
-            context.packageManager.queryIntentServices(Intent(ACTION).setPackage(pkg), 0)
-                .any { it.serviceInfo.exported && it.serviceInfo.enabled && it.serviceInfo.applicationInfo.enabled }
+        fun available(context: Context): List<String> {
+            if (Build.VERSION.SDK_INT < 30) return emptyList()
+            val home = context.packageManager.resolveActivity(
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0,
+            )?.activityInfo?.packageName
+            return PACKAGES.filter { pkg ->
+                context.packageManager.queryIntentServices(Intent(ACTION).setPackage(pkg), 0)
+                    .any { it.serviceInfo.exported && it.serviceInfo.enabled && it.serviceInfo.applicationInfo.enabled }
+            }.sortedBy { it != home }
         }
 
         fun create(activity: ComponentActivity, embedded: () -> DesktopSession, onLaunch: () -> Unit,
