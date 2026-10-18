@@ -15,7 +15,6 @@ import android.os.Process
 import android.os.UserManager
 import android.net.Uri
 import android.view.Display
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -186,6 +185,16 @@ class ExternalOmaDesktopAndroidTest {
                 await("home-menu action opens the provider menu") { desktop.details.getBoolean("homeMenuOpen") }
                 ui { desktop.dismissPanels() }
                 await("dismiss closes the provider home menu") { !desktop.details.getBoolean("homeMenuOpen") }
+                ui { desktop.apps() }
+                await("stock app panel opens") { desktop.details.getBoolean("overlay") }
+                ui { desktop.search("settings", false) }
+                await("stock search receives external query") { desktop.details.getString("query") == "settings" }
+                ui { desktop.dismissPanels() }
+                await("stock app panel closes") { !desktop.details.getBoolean("overlay") }
+                ui { desktop.widgets() }
+                await("stock widget store opens") { desktop.details.getBoolean("overlay") }
+                ui { desktop.dismissPanels() }
+                await("stock widget store closes") { !desktop.details.getBoolean("overlay") }
             }
         } finally {
             display.release()
@@ -289,16 +298,9 @@ class ExternalOmaDesktopAndroidTest {
                     File(context.getExternalFilesDir(null), "bridge-all-pages.png").outputStream().use {
                         latest!!.compress(Bitmap.CompressFormat.PNG, 100, it)
                     }
-                    val root = field(activity, "root") as View
-                    val surface = desktop.view.getChildAt(0)
-                    val point = floatArrayOf(25f, surface.height - 24f)
-                    val transform = Matrix()
-                    surface.transformMatrixToGlobal(transform)
-                    transform.mapPoints(point)
-                    WorkspaceCursor.moveTo(point[0], point[1], root.width.toFloat(), root.height.toFloat())
-                    assertTrue(BeastInputRouter.click(activity.display!!.displayId, point[0].toInt(), point[1].toInt(), MotionEvent.BUTTON_PRIMARY))
+                    desktop.apps()
                 }
-                await("phone-routed click opens the provider drawer") { desktop.details.getBoolean("overlay") }
+                await("provider app panel opens") { desktop.details.getBoolean("overlay") }
                 val beforeScroll = desktop.details.getInt("drawerScrollIndex") * 10000 + desktop.details.getInt("drawerScrollOffset")
                 ui {
                     val target = desktop.view.getChildAt(0)

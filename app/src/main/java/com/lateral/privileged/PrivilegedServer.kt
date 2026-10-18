@@ -176,6 +176,7 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
     @Volatile private var lastImeRoutingError = ""
     private val imePolicyLock = Any()
     private val sessionImeLock = Any()
+    private val sessionImeRecoveryRetrying = AtomicBoolean(false)
     private var sessionImeId: String? = null
     private var sessionPreviousImeId: String? = null
     private var sessionOwner: IBinder? = null
@@ -583,7 +584,11 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
             }
 
             if (sessionImeId != null && sessionImeId != imeId) {
-                restoreSessionImeInternal("replaced by new session")
+                if (!restoreSessionImeInternal("replaced by new session")) {
+                    return@synchronized arrayOf(
+                        IME_SESSION_RESTORE_FAILED.toString(), sessionPreviousImeId.orEmpty(), selectedInputMethod(),
+                    )
+                }
             }
 
             unlinkSessionOwner()
@@ -639,6 +644,12 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
     override fun restoreSessionInputMethod(sessionImeId: String, previousImeId: String): Int =
         synchronized(sessionImeLock) {
             val current = selectedInputMethod()
+            if (current.isBlank()) {
+                this.sessionImeId = sessionImeId
+                this.sessionPreviousImeId = previousImeId
+                retrySessionImeRestore()
+                return@synchronized IME_SESSION_RESTORE_FAILED
+            }
             if (current != sessionImeId) {
                 clearSessionImeState()
                 return@synchronized IME_SESSION_NOT_SELECTED
@@ -691,15 +702,39 @@ class PrivilegedServer() : IPrivilegedService.Stub() {
         val active = sessionImeId
         val previous = sessionPreviousImeId
         val current = selectedInputMethod()
-        val shouldRestore = !active.isNullOrBlank() && !previous.isNullOrBlank() &&
-            previous != active && current == active
-        val restored = !shouldRestore || (
-            run("ime", "enable", previous!!) && run("ime", "set", previous) &&
-                waitForSelectedIme(previous)
-            )
+        val restored = when (ImeRecoveryPolicy.restoreAction(active, previous, current)) {
+            ImeRecoveryPolicy.RestoreAction.DONE -> true
+            ImeRecoveryPolicy.RestoreAction.RETRY -> false
+            ImeRecoveryPolicy.RestoreAction.SELECT_PREVIOUS ->
+                run("ime", "enable", previous!!) && run("ime", "set", previous) && waitForSelectedIme(previous)
+        }
         Log.i(TAG, "session IME cleanup ($reason): restored=$restored current=$current")
-        clearSessionImeState()
+        if (restored) clearSessionImeState()
+        else {
+            // A blank selection during boot is unknown, and a failed `ime set` can be transient.
+            // Keep the durable prior-IME record until restoration is observed or the user picks another IME.
+            unlinkSessionOwner()
+            retrySessionImeRestore()
+        }
         return restored
+    }
+
+    private fun retrySessionImeRestore() {
+        if (destroying.get() || !sessionImeRecoveryRetrying.compareAndSet(false, true)) return
+        Thread({
+            try {
+                for (delay in longArrayOf(500, 1_000, 2_000, 5_000, 15_000)) {
+                    SystemClock.sleep(delay)
+                    synchronized(sessionImeLock) {
+                        if (destroying.get() || sessionImeId == null || sessionOwner != null) return@Thread
+                        if (restoreSessionImeInternal("retry after failed cleanup")) return@Thread
+                    }
+                }
+                Log.w(TAG, "session IME cleanup still pending; saved keyboard will be retried on helper restart")
+            } finally {
+                sessionImeRecoveryRetrying.set(false)
+            }
+        }, "lateral-ime-recovery").apply { isDaemon = true }.start()
     }
 
     private fun persistSessionImeState(active: String, previous: String): Boolean =
