@@ -36,7 +36,10 @@ internal object ProtectedTileInputRegions {
         val origin = IntArray(2); root.getLocationOnScreen(origin)
         val region = Region(0, 0, root.width, root.height)
         fun bounds(view: View): Rect? = Rect().takeIf { view.getGlobalVisibleRect(it) }?.apply { offset(-origin[0],-origin[1]) }
-        protected.forEach { bounds(it)?.let { rect -> region.op(rect, Region.Op.DIFFERENCE) } }
+        protected.forEach { tile ->
+            tile.contentBoundsOnScreen()?.apply { offset(-origin[0], -origin[1]) }
+                ?.let { region.op(it, Region.Op.DIFFERENCE) }
+        }
 
         fun retainControls(view: View) {
             if (!view.isShown || view.alpha <= 0f) return

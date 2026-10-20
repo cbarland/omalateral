@@ -2,6 +2,7 @@ package com.lateral.beast
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.SurfaceTexture
 import android.os.Handler
@@ -437,6 +438,15 @@ class TaskSurfaceView @JvmOverloads constructor(
         if (!getGlobalVisibleRect(visible) || visible.width() <= 0 || visible.height() <= 0 ||
             (requireInside && !visible.contains(globalX, globalY))
         ) return null
+        if (protectedTile.protectedContent) {
+            val toGlobal = Matrix()
+            val toLocal = Matrix()
+            transformMatrixToGlobal(toGlobal)
+            if (!toGlobal.invert(toLocal)) return null
+            val point = floatArrayOf(globalX.toFloat(), globalY.toFloat())
+            toLocal.mapPoints(point)
+            return protectedFit()?.sourcePoint(point[0], point[1], clampOutside = !requireInside)
+        }
         val targetWidth = hostedWidth()
         val targetHeight = hostedHeight()
         val x = ((globalX - visible.left).toFloat() / visible.width() * targetWidth)
@@ -614,6 +624,8 @@ class TaskSurfaceView @JvmOverloads constructor(
 
     private fun forwardTouch(event: MotionEvent): Boolean {
         val id = displayId ?: return true
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && protectedTile.protectedContent &&
+            protectedFit()?.sourcePoint(event.x, event.y) == null) return false
         requestFocus()
         if (event.actionMasked == MotionEvent.ACTION_DOWN) onInteraction?.invoke()
 
@@ -760,6 +772,8 @@ class TaskSurfaceView @JvmOverloads constructor(
         if (event.action == MotionEvent.ACTION_SCROLL &&
             event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)
         ) {
+            if (protectedTile.protectedContent &&
+                protectedFit()?.sourcePoint(event.x, event.y) == null) return false
             onInteraction?.invoke()
             val point = renderPoint(event.x, event.y)
             PrivilegedService.scrollOnDisplay(
@@ -789,9 +803,14 @@ class TaskSurfaceView @JvmOverloads constructor(
     private fun renderHeight(viewHeight: Int = height): Int =
         (viewHeight.coerceAtLeast(1) * renderScale).roundToInt().coerceAtLeast(1)
 
+    private fun protectedFit(): ProtectedTileFit? = if (protectedTile.protectedContent) {
+        ProtectedTileGeometry.fit(hostedWidth(), hostedHeight(), width, height)
+    } else null
+
     private fun renderPoint(x: Float, y: Float): Pair<Int, Int> =
-        (x / width.coerceAtLeast(1) * hostedWidth()).roundToInt().coerceIn(0, hostedWidth() - 1) to
-            (y / height.coerceAtLeast(1) * hostedHeight()).roundToInt().coerceIn(0, hostedHeight() - 1)
+        protectedFit()?.sourcePoint(x, y, clampOutside = true) ?:
+            ((x / width.coerceAtLeast(1) * hostedWidth()).roundToInt().coerceIn(0, hostedWidth() - 1) to
+                (y / height.coerceAtLeast(1) * hostedHeight()).roundToInt().coerceIn(0, hostedHeight() - 1))
 
     fun release() {
         if (released) return

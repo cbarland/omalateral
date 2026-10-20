@@ -2,8 +2,11 @@ package com.lateral.beast
 
 import android.content.Context
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.PixelFormat
 import android.graphics.PorterDuff
+import android.graphics.Rect
+import android.graphics.RectF
 import android.os.Binder
 import android.os.Build
 import android.os.Parcel
@@ -16,6 +19,8 @@ import android.view.SurfaceView
 import android.view.ViewTreeObserver
 import com.lateral.privileged.IProtectedDisplayListener
 import com.lateral.privileged.PrivilegedService
+import kotlin.math.ceil
+import kotlin.math.floor
 
 /** Native-only secure presentation below normal window chrome, never a pixel consumer. */
 internal class ProtectedTileSurface(context: Context, private val changed: (Boolean) -> Unit) :
@@ -153,6 +158,19 @@ internal class ProtectedTileSurface(context: Context, private val changed: (Bool
             parcel.setDataPosition(0)
             SurfaceControl.CREATOR.createFromParcel(parcel)
         } finally { parcel.recycle() }
+    }
+
+    /** Only the fitted image, not its letterbox bars, passes touch to the native clone. */
+    fun contentBoundsOnScreen(): Rect? {
+        val fit = ProtectedTileGeometry.fit(sourceWidth, sourceHeight, width, height) ?: return null
+        val content = RectF(fit.left, fit.top, fit.right, fit.bottom)
+        val transform = Matrix()
+        transformMatrixToGlobal(transform)
+        transform.mapRect(content)
+        val bounds = Rect(floor(content.left).toInt(), floor(content.top).toInt(),
+            ceil(content.right).toInt(), ceil(content.bottom).toInt())
+        val visible = Rect()
+        return bounds.takeIf { getGlobalVisibleRect(visible) && it.intersect(visible) }
     }
 
     private fun submit() {

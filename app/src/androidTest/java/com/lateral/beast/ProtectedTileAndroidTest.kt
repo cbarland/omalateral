@@ -182,6 +182,12 @@ class ProtectedTileAndroidTest {
             assertEquals("Protected source width stays stable while the tile changes",initialMode.physicalWidth,protectedMode.physicalWidth)
             assertEquals("Protected source height stays stable while the tile changes",initialMode.physicalHeight,protectedMode.physicalHeight)
             before=inputCount("taps")
+            shell("input -d ${output.displayId} tap 60 500")
+            Thread.sleep(250)
+            assertEquals("Letterbox bar does not target the protected app",before,inputCount("taps"))
+            shell("input -d ${output.displayId} tap 300 500")
+            await("fitted secure content remains touchable") { inputCount("taps")>before }
+            before=inputCount("taps")
             service.clickTouch(source,240,300)
             await("input after resize") { inputCount("taps")>before }
             ui { tile!!.visibility=View.GONE }

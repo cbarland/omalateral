@@ -37,9 +37,11 @@ signatures must not be packaged into an APK; use `scripts/verify-hidden-api-pack
 - Focused-app capture is disabled for a protected tile. Normal screenshots still
   exclude its protected pixels; chrome and ordinary tiles remain capturable.
 - A protected app keeps its current virtual-display dimensions while its tile is
-  resized. The native mirror scales to the new tile bounds; once the app clears
-  `FLAG_SECURE`, the source display catches up to the tile size. This avoids an
-  Android input-disabled transition during secure presentation.
+  resized. The native mirror fits inside the tile at a uniform scale, with centered
+  letterbox bars when the aspect ratios differ. Touch and PhoneUI pointer input use
+  that same fitted rectangle. Once the app clears `FLAG_SECURE`, the source display
+  catches up to the tile size. This avoids an Android input-disabled transition
+  during secure presentation.
 
 This is secure presentation, not DRM decoding or a guarantee that every banking,
 streaming, or device-policy-restricted application supports external displays.
@@ -47,7 +49,7 @@ Physical Nubia/glasses validation, display disconnect/reconnect, and abrupt help
 process death remain unverified for this omalateral port. If the helper crashes,
 close/reopen the external workspace to destroy its old host surface before retrying.
 
-## Current validation (2026-10-15)
+## Current validation (2026-10-19)
 
 - `stableDebug` and test APK builds and JVM tests pass in the isolated secure-presentation worktree.
 - On emulator-5554 with a temporary 3840 × 1200 secure overlay, the fixture passes
@@ -56,6 +58,10 @@ close/reopen the external workspace to destroy its old host surface before retry
   restore, two protected tiles, and graceful helper cleanup. The second tile starts
   in its fixture activity and toggles `FLAG_SECURE` there; launching a new secure
   activity across tasks is outside this fixture.
+- On emulator-5562 with a temporary 1920 × 1080 secure overlay, the updated fixture
+  passes the same flow after aspect-preserving resize, including a touch in the
+  letterbox bar that does not reach the protected app and a touch in the fitted
+  image that does. The fixture's on-device report records `passed: true`.
 - A physical Nubia display has not been tested for this split.
 
 The instrumented fixture is `com.lateral.beast.ProtectedTileAndroidTest`; it requires
