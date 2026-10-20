@@ -154,16 +154,9 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     private fun updateKeyboardTarget() {
         if (!::hostedKeyboardController.isInitialized || !activityResumed) return
         val hosted = HostedTextInputSession.target
-        val next = when {
-            hosted != null && !(PhoneView.active && PhoneView.externalKeyboardPresent) -> hosted
-            hosted != null -> null
-            LauncherSearchSession.active || DesktopTextInputSession.active -> HostedTextInputSession.Target(
-                Display.DEFAULT_DISPLAY, taskId.toLong(), taskId, packageName,
-                "Omalauncher", android.text.InputType.TYPE_CLASS_TEXT,
-                android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH,
-            )
-            else -> null
-        }
+        // The launcher query is a real PhoneUI editor. Let Android use the user's
+        // selected keyboard; only external app editors need the hosted IME lease.
+        val next = hosted?.takeUnless { PhoneView.active && PhoneView.externalKeyboardPresent }
         if (next == keyboardTarget) return
         keyboardTarget = next
         if (next != null) {
@@ -1275,7 +1268,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     }
 
 
-    /** Phone-owned IME companion for the Beast launcher; results remain on BeastUI. */
+    /** Phone-owned search field for the Beast launcher; results remain on BeastUI. */
     private fun showBeastLauncherSearchOnPhone() {
         // Give the shell move one traversal before focusing PhoneUI's in-layout field.
         keepPhoneUiOnDefaultDisplay()
