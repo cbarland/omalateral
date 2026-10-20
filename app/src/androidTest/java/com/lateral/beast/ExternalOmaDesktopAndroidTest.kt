@@ -234,31 +234,27 @@ class ExternalOmaDesktopAndroidTest {
         }
     }
 
-    @Test fun previewProviderShowsInheritedPagesAndPhonePointerControlsTheLiveSurface() {
+    @Test fun previewProviderShowsFreshWorkspaceGridAndPhonePointerControlsTheLiveSurface() {
         val context = instrumentation.targetContext
         assertTrue("Install the bridge provider fixture", ExternalOmaDesktop.available(context).isNotEmpty())
         instrumentation.uiAutomation.adoptShellPermissionIdentity()
         val images = ImageReader.newInstance(3840, 1200, PixelFormat.RGBA_8888, 3)
         var latest: Bitmap? = null
         var captureRequested = false
-        var pageCount = 0
         var pageColors = emptyList<Int>()
         images.setOnImageAvailableListener({ source ->
             source.acquireLatestImage()?.use { image ->
                 if (!captureRequested) return@use
                 val plane = image.planes[0]
-                pageColors = (0 until pageCount).map { page ->
+                pageColors = listOf(run {
                     val colors = HashSet<Int>()
-                    val x0 = page * image.width / pageCount
-                    val x1 = (page + 1) * image.width / pageCount
-                    for (y in 80 until image.height - 100 step 8) for (x in x0 + 12 until x1 - 12 step 8) {
+                    for (y in 80 until image.height - 100 step 16) for (x in 12 until image.width - 12 step 16) {
                         val at = y * plane.rowStride + x * plane.pixelStride
                         val color = (plane.buffer.get(at).toInt() and 255) or ((plane.buffer.get(at + 1).toInt() and 255) shl 8) or ((plane.buffer.get(at + 2).toInt() and 255) shl 16)
                         colors += color
                     }
                     colors.size
-                }
-                // Other inherited pages may legitimately be empty.
+                })
                 if (pageColors.firstOrNull()?.let { it <= 10 } != false) return@use
                 captureRequested = false
                 // Gralloc need not map the last row's trailing padding. Copy valid row pixels
@@ -304,12 +300,16 @@ class ExternalOmaDesktopAndroidTest {
                     if (candidate?.connected == true) { desktop = candidate; true } else false
                 }
                 try {
-                    await("inherited pages") { (desktop.details.getIntArray("pages")?.size ?: 0) >= 2 }
+                    await("fresh workspace grid") { desktop.details.getBoolean("workspacePages") &&
+                        (desktop.details.getIntArray("pages")?.size ?: 0) == 10 }
                 } catch (error: AssertionError) {
                     throw AssertionError("${error.message}; provider=${desktop.status}; details=${desktop.details}", error)
                 }
-                assertTrue(desktop.details.getBoolean("pagesSideBySide"))
-                pageCount = checkNotNull(desktop.details.getIntArray("pages")).size
+                assertFalse(desktop.details.getBoolean("pagesSideBySide"))
+                assertTrue(desktop.details.getBoolean("workspacePages"))
+                assertArrayEquals((1..10).toList().toIntArray(), desktop.details.getIntArray("pages"))
+                ui { desktop.workspace(2) }
+                await("workspace switch reaches provider") { desktop.details.getInt("workspace") == 2 }
                 val tasksBeforeInvalidLaunch = WorkspaceState.tasks.size
                 val callbacks = desktop.javaClass.getDeclaredField("callbacks").apply { isAccessible = true }
                     .get(desktop) as IDesktopHost
@@ -322,11 +322,10 @@ class ExternalOmaDesktopAndroidTest {
                 await("host cursor is visible") { WorkspaceCursor.position().visible && (field(activity, "cursorOverlay") as View).isShown }
                 Thread.sleep(1500)
                 ui { captureRequested = true; (field(activity, "root") as View).postInvalidateOnAnimation() }
-                await("rendered inherited home; last region counts=$pageColors") { latest != null }
-                assertEquals("Desktop sizing must keep all source pages", pageCount, desktop.details.getIntArray("pages")!!.size)
+                await("rendered desktop wallpaper; color count=$pageColors") { latest != null }
                 Thread.sleep(500)
                 ui {
-                    File(context.getExternalFilesDir(null), "bridge-all-pages.png").outputStream().use {
+                    File(context.getExternalFilesDir(null), "bridge-fresh-desktop.png").outputStream().use {
                         latest!!.compress(Bitmap.CompressFormat.PNG, 100, it)
                     }
                     desktop.apps()

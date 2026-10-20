@@ -10,6 +10,7 @@ interface DesktopSession {
     fun search(query: String, submit: Boolean)
     fun apps()
     fun widgets()
+    fun workspace(number: Int) = Unit
     fun homeMenu(): Boolean = false
     fun themes()
     fun dismissPanels()

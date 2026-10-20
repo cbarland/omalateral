@@ -7,14 +7,14 @@ when the provider is missing, incompatible, or declined. This adapter follows th
 proposed Omalauncher desktop bridge; a stock release without the bridge does not
 share its existing home state with Omalateral.
 
-The bridge seeds Omalateral's widget arrangement from the phone once, then keeps
-its cells, pages, pinned apps, folders, and visibility in a separate desktop
-profile. Widget definitions and theme updates still come from Omalauncher. A
-provider with `uiScale` support receives Omalateral's display-specific UI + text
-scale when the surface opens after a slider change; the provider lays out
-the widget content at that density without changing surface/input coordinates.
-Saved widget page and cell assignments persist. Physical tile rectangles and
-gaps can change with scale; verify existing widgets remain placed and usable.
+Omalateral requests a fresh external profile with ten workspace pages. Its
+widget visibility, placement, and pinned apps are independent of the phone's
+home pages; the user adds installed widgets to each workspace. Widget
+definitions, data services, and theme updates still come from Omalauncher.
+Omalateral sends its display-specific UI + text scale to the provider when the
+surface opens after a slider change. The provider reflows the external grid and
+scales widget content without changing surface/input coordinates. Saved widget
+page assignments persist. Verify existing widgets remain placed and usable.
 
 The helper's composed-display capture includes the provider home and widgets.
 It selects only a physical display that matches the requested logical layer
@@ -51,9 +51,10 @@ the screenshot.
   the embedded desktop. Consent requests are serialized across sessions. The
   emulator fixture covers normal service behavior; a deliberately stalled
   provider and process-death recovery still need targeted validation.
-- The fixture explicitly selects `dev.omalauncher.bridgepreview`, and the
-  screenshot content assertion samples its first page. Release-provider
-  autodetection and three populated inherited pages remain physical checks.
+- The earlier fixture explicitly selected `dev.omalauncher.bridgepreview` and
+  sampled an inherited first page. The current fresh-workspace profile needs a
+  separate provider-discovery fixture. Release-provider autodetection remains
+  a physical check.
 - Work-profile launches currently go directly to the external display rather
   than through managed tiles and PhoneUI controls.
 
@@ -66,13 +67,14 @@ and Shizuku/helper state with each result. Preserve logs and captures on failure
 1. Install the consolidated Omalateral APK and bridge-enabled Omalauncher. Confirm
    automatic detection and the PhoneUI consent flow; deny once and confirm the
    embedded fallback, then allow and reconnect.
-2. Verify all three populated home screens appear side by side with the selected
-   theme and live widgets. Change a widget or theme on the phone and confirm the
-   external desktop updates without replacing the phone launcher.
-   Move or resize an external widget, reconnect, and confirm its new arrangement
-   persists while the phone's arrangement stays in place. Change UI + text scale
-   from PhoneUI and confirm widget content and text resize live without moving
-   the pointer target away from visible controls.
+2. Verify the external grid starts independently from the phone's three home
+   screens. Add an installed widget to a workspace and confirm it appears only
+   there. Change a shared widget definition or theme on the phone and confirm
+   the external desktop updates without replacing the phone launcher. Move or
+   resize an external widget, reconnect, and confirm its arrangement persists
+   while the phone's arrangement stays in place. Change UI + text scale from
+   PhoneUI and confirm the grid, widget frame, and text resize together without
+   moving the pointer target away from visible controls.
 3. Use PhoneUI alone to move the visible cursor, click, drag, right-click, scroll,
    search, open and dismiss provider panels, and manage Android app tiles. Check
    that moving a floating window or rearranging a tile does not snap back.

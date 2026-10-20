@@ -1222,6 +1222,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
     }
 
     private fun renderWorkspace() {
+        omaDesktop?.workspace(WorkspaceState.activeWorkspace)
         val tasks = WorkspaceState.tasks
         // An explicit launcher request becomes visible immediately, then receives its
         // Android task ID during reconciliation. Baseline imports remain PHONE/minimized.

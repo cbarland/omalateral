@@ -102,6 +102,8 @@ internal class ExternalOmaDesktop private constructor(
     private var local: DesktopSession? = null
     private var overlay = false
     private var supportsHomeMenu = false
+    private var desiredWorkspace = 1
+    private var sentWorkspace: Int? = null
     var sessionId: String? = null
         private set
     var details = Bundle()
@@ -322,8 +324,10 @@ internal class ExternalOmaDesktop private constructor(
             putInt("displayId", displayId)
             putInt("width", target.width); putInt("height", target.height)
             putString("launchMode", "host")
-            putString("profile", if (com.lateral.BuildConfig.DEBUG) activity.intent.getStringExtra("desktopProfile") ?: "omalateral_workspace" else "omalateral_workspace")
-            putBoolean("pagesSideBySide", true); putBoolean("inheritPhoneLayout", true)
+            putString("profile", if (com.lateral.BuildConfig.DEBUG) activity.intent.getStringExtra("desktopProfile") ?: "omalateral_workspace_v2" else "omalateral_workspace_v2")
+            putBoolean("pagesSideBySide", false)
+            putBoolean("inheritPhoneLayout", false)
+            putBoolean("workspacePages", true)
             putFloat("uiScale", uiScale())
         }
         val epoch = ++connectionEpoch
@@ -372,6 +376,8 @@ internal class ExternalOmaDesktop private constructor(
                     remoteDisplayId = displayId
                     remote = session
                     sendRemote { setVisible(visible) }
+                    sentWorkspace = null
+                    workspace(desiredWorkspace)
                     status = "Connected to $provider"
                     android.util.Log.i("ExternalOma", "$status on display $displayId")
                     onConnection(true)
@@ -473,6 +479,7 @@ internal class ExternalOmaDesktop private constructor(
         val oldSurface = surface
         surface = null
         remote = null; sessionId = null; remoteDisplayId = -1; details = Bundle()
+        sentWorkspace = null
         old?.let(::closeSessionAsync)
         if (oldSurface?.parent === view) view.removeView(oldSurface)
         if (old != null) onConnection(false)
@@ -498,6 +505,13 @@ internal class ExternalOmaDesktop private constructor(
     override fun search(query: String, submit: Boolean) { if (local != null) local!!.search(query, submit) else sendRemote { search(query, submit) } }
     override fun apps() { if (local != null) local!!.apps() else sendRemote { action("drawer") } }
     override fun widgets() { if (local != null) local!!.widgets() else sendRemote { action("widgets") } }
+    override fun workspace(number: Int) {
+        if (number !in 1..10) return
+        desiredWorkspace = number
+        if (remote == null || sentWorkspace == number) return
+        sentWorkspace = number
+        sendRemote { action("workspace:$number") }
+    }
     override fun homeMenu(): Boolean {
         local?.let { return it.homeMenu() }
         if (remote == null || !supportsHomeMenu) return false
