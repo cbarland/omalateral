@@ -745,13 +745,28 @@ object PrivilegedService {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private fun hotkeyListenerFor(binder: IBinder) = object : IPrivilegedHotkeyListener.Stub() {
+        private val mouseEvents = MouseEventBatcher<SessionFence.Session<HelperSession>>(
+            post = { mainHandler.post(it) },
+            onMotion = { expected, dx, dy, wheel ->
+                if (sessions.matches(expected)) mouseDeltaHandler?.invoke(dx, dy, wheel)
+            },
+            onButton = { expected, code, pressed ->
+                if (sessions.matches(expected)) mouseButtonHandler?.invoke(code, pressed)
+            },
+        )
         private fun dispatch(action: () -> Unit) {
             val expected = currentSession?.takeIf { it.value.binder == binder } ?: return
             mainHandler.post { if (sessions.matches(expected)) action() }
         }
         override fun onHotkey(code: Int) = dispatch { hotkeyHandler?.invoke(code) }
-        override fun onMouseDelta(dx: Int, dy: Int, wheel: Int) = dispatch { mouseDeltaHandler?.invoke(dx, dy, wheel) }
-        override fun onMouseButton(code: Int, pressed: Boolean) = dispatch { mouseButtonHandler?.invoke(code, pressed) }
+        override fun onMouseDelta(dx: Int, dy: Int, wheel: Int) {
+            val expected = currentSession?.takeIf { it.value.binder == binder } ?: return
+            mouseEvents.motion(expected, dx, dy, wheel)
+        }
+        override fun onMouseButton(code: Int, pressed: Boolean) {
+            val expected = currentSession?.takeIf { it.value.binder == binder } ?: return
+            mouseEvents.button(expected, code, pressed)
+        }
     }
 
     /**
@@ -1032,4 +1047,50 @@ object PrivilegedService {
     private const val BACK_SETTLE_MS = 800L
     private const val DISPLAY_IME_POLICY_FALLBACK_DISPLAY = 1
     private const val IME_ROUTING_UNAVAILABLE = -2
+}
+
+/** Keep a backed-up UI thread from replaying stale mouse frames before a click. */
+internal class MouseEventBatcher<F : Any>(
+    private val post: (Runnable) -> Unit,
+    private val onMotion: (F, Int, Int, Int) -> Unit,
+    private val onButton: (F, Int, Boolean) -> Unit,
+) {
+    private data class Motion<F>(val fence: F, var dx: Int, var dy: Int, var wheel: Int)
+
+    private val lock = Any()
+    private var pendingMotion: Motion<F>? = null
+
+    fun motion(fence: F, dx: Int, dy: Int, wheel: Int) {
+        synchronized(lock) {
+            val pending = pendingMotion?.takeIf {
+                it.fence === fence && it.wheel == 0 && wheel == 0 &&
+                    sameDirection(it.dx, dx) && sameDirection(it.dy, dy)
+            }
+            if (pending != null) {
+                pending.dx += dx
+                pending.dy += dy
+                pending.wheel += wheel
+            } else {
+                val frame = Motion(fence, dx, dy, wheel)
+                pendingMotion = frame
+                post(Runnable {
+                    synchronized(lock) {
+                        if (pendingMotion === frame) pendingMotion = null
+                    }
+                    onMotion(frame.fence, frame.dx, frame.dy, frame.wheel)
+                })
+            }
+        }
+    }
+
+    private fun sameDirection(first: Int, next: Int): Boolean =
+        first == 0 || next == 0 || (first > 0) == (next > 0)
+
+    fun button(fence: F, code: Int, pressed: Boolean) {
+        synchronized(lock) {
+            // The already-posted motion runs first. Later motion must not merge across a button.
+            pendingMotion = null
+            post(Runnable { onButton(fence, code, pressed) })
+        }
+    }
 }

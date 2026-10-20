@@ -151,7 +151,6 @@ class InputController(private val onStatusUpdate: (String) -> Unit) {
                 )
             }
         }
-        onStatusUpdate("Beast cursor ${cursorX.toInt()}, ${cursorY.toInt()}")
     }
 
     private fun button(display: Display, code: Int, pressed: Boolean) {
