@@ -21,6 +21,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import com.lateral.WorkspaceCursor
+import com.lateral.DisplayPreferences
 import com.lateral.privileged.PrivilegedService
 import com.lateral.privileged.UsbHelperLifecycleAndroidTest
 import dev.omalauncher.desktop.IDesktopHost
@@ -180,6 +181,36 @@ class ExternalOmaDesktopAndroidTest {
                 await("automatic provider connection") {
                     val candidate = field(activity, "omaDesktop") as? ExternalOmaDesktop
                     if (candidate?.connected == true) { desktop = candidate; true } else false
+                }
+                val activityDisplay = checkNotNull(activity.display)
+                val target = DisplayPreferences.target(activity, activityDisplay)
+                val original = DisplayPreferences.load(context, target)
+                await("initial provider UI scale") {
+                    kotlin.math.abs(desktop.details.getFloat("uiScale") - original.uiScale) < .01f
+                }
+                try {
+                    val changed = if (original.uiScale < 1.95f) 2f else 1f
+                    val before = desktop
+                    DisplayPreferences.save(context, target, original.copy(uiScale = changed))
+                    await("provider widget and text scale follows the display profile") {
+                        val current = field(activity, "omaDesktop") as? ExternalOmaDesktop
+                        if (current !== before && current?.connected == true &&
+                            kotlin.math.abs(current.details.getFloat("uiScale") - changed) < .01f) {
+                            desktop = current
+                            true
+                        } else false
+                    }
+                    assertFalse("The previous provider session must close after UI rebuild", before.connected)
+                } finally {
+                    DisplayPreferences.save(context, target, original)
+                    await("restored provider UI scale") {
+                        val current = field(activity, "omaDesktop") as? ExternalOmaDesktop
+                        if (current?.connected == true &&
+                            kotlin.math.abs(current.details.getFloat("uiScale") - original.uiScale) < .01f) {
+                            desktop = current
+                            true
+                        } else false
+                    }
                 }
                 ui { assertTrue("The preview provider exposes its stock home menu", desktop.homeMenu()) }
                 await("home-menu action opens the provider menu") { desktop.details.getBoolean("homeMenuOpen") }

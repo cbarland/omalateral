@@ -7,6 +7,15 @@ when the provider is missing, incompatible, or declined. This adapter follows th
 proposed Omalauncher desktop bridge; a stock release without the bridge does not
 share its existing home state with Omalateral.
 
+The bridge seeds Omalateral's widget arrangement from the phone once, then keeps
+its cells, pages, pinned apps, folders, and visibility in a separate desktop
+profile. Widget definitions and theme updates still come from Omalauncher. A
+provider with `uiScale` support receives Omalateral's display-specific UI + text
+scale when the surface opens after a slider change; the provider lays out
+the widget content at that density without changing surface/input coordinates.
+Saved widget page and cell assignments persist. Physical tile rectangles and
+gaps can change with scale; verify existing widgets remain placed and usable.
+
 The helper's composed-display capture includes the provider home and widgets.
 It selects only a physical display that matches the requested logical layer
 stack; an unknown or ambiguous SurfaceFlinger dump fails closed. The capture
@@ -60,6 +69,10 @@ and Shizuku/helper state with each result. Preserve logs and captures on failure
 2. Verify all three populated home screens appear side by side with the selected
    theme and live widgets. Change a widget or theme on the phone and confirm the
    external desktop updates without replacing the phone launcher.
+   Move or resize an external widget, reconnect, and confirm its new arrangement
+   persists while the phone's arrangement stays in place. Change UI + text scale
+   from PhoneUI and confirm widget content and text resize live without moving
+   the pointer target away from visible controls.
 3. Use PhoneUI alone to move the visible cursor, click, drag, right-click, scroll,
    search, open and dismiss provider panels, and manage Android app tiles. Check
    that moving a floating window or rearranging a tile does not snap back.

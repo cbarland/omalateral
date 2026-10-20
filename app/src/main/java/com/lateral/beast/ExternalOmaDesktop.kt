@@ -28,6 +28,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import com.lateral.InputSettings
 import com.lateral.OmarchyTheme
+import com.lateral.DisplayPreferences
 import dev.omalauncher.desktop.IDesktopBridge
 import dev.omalauncher.desktop.IDesktopHost
 import dev.omalauncher.desktop.IDesktopSession
@@ -197,6 +198,10 @@ internal class ExternalOmaDesktop private constructor(
         view.viewTreeObserver.addOnPreDrawListener(placementObserver)
     }
 
+    private fun uiScale(): Float = activity.display?.let { display ->
+        DisplayPreferences.load(activity, DisplayPreferences.target(activity, display)).uiScale
+    } ?: 1f
+
     private fun bind() {
         if (closed || bound) return
         bound = runCatching { activity.bindService(Intent(ACTION).setPackage(provider), connection, Context.BIND_AUTO_CREATE) }.getOrDefault(false)
@@ -319,6 +324,7 @@ internal class ExternalOmaDesktop private constructor(
             putString("launchMode", "host")
             putString("profile", if (com.lateral.BuildConfig.DEBUG) activity.intent.getStringExtra("desktopProfile") ?: "omalateral_workspace" else "omalateral_workspace")
             putBoolean("pagesSideBySide", true); putBoolean("inheritPhoneLayout", true)
+            putFloat("uiScale", uiScale())
         }
         val epoch = ++connectionEpoch
         opening = true
