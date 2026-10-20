@@ -6,7 +6,10 @@ import androidx.compose.ui.text.font.FontFamily
 import dev.patrickgold.florisboard.embedded.EmbeddedKeyboardTheme
 import dev.patrickgold.florisboard.ime.theme.FlorisImeUi
 import dev.patrickgold.florisboard.ime.theme.FlorisImeThemeBaseStyle
+import dev.patrickgold.florisboard.ime.input.InputShiftState
+import dev.patrickgold.florisboard.ime.text.key.KeyCode
 import org.florisboard.lib.snygg.SnyggElementRule
+import org.florisboard.lib.snygg.SnyggSelector
 import org.florisboard.lib.snygg.SnyggSinglePropertySetEditor
 
 /** Builds the embedded FlorisBoard theme from LATERAL_'s current appearance settings. */
@@ -20,6 +23,7 @@ internal fun lateralKeyboardTheme(): EmbeddedKeyboardTheme {
     val onBackground = InputSettings.theme.brightForeground
     val onSurface = InputSettings.theme.foreground
     val onSurfaceVariant = InputSettings.theme.darkForeground
+    val danger = InputSettings.theme.danger
 
     val stylesheet = FlorisImeThemeBaseStyle.edit().apply {
         // Keep FlorisBoard's complete rule set, replacing only its Material palette and
@@ -60,6 +64,32 @@ internal fun lateralKeyboardTheme(): EmbeddedKeyboardTheme {
                 rule.fontFamily = rule.genericFontFamily(FontFamily.Monospace)
             }
         }
+        // FlorisBoard's base style still has fixed colors outside its palette variables.
+        // Replace those visible accents too, including the caps-lock and popup states.
+        fun tint(rule: SnyggElementRule, textColor: Int? = null, fillColor: Int? = null) {
+            (rules[rule] as? SnyggSinglePropertySetEditor)?.apply {
+                textColor?.let { this.foreground = rgbaColor(Color.red(it), Color.green(it), Color.blue(it)) }
+                fillColor?.let { this.background = rgbaColor(Color.red(it), Color.green(it), Color.blue(it)) }
+            }
+        }
+        rules.keys.filterIsInstance<SnyggElementRule>().firstOrNull { rule ->
+            rule.elementName == FlorisImeUi.Key.elementName &&
+                KeyCode.SHIFT.toString() in rule.attributes[FlorisImeUi.Attr.Code].orEmpty() &&
+                InputShiftState.CAPS_LOCK.toString() in rule.attributes[FlorisImeUi.Attr.ShiftState].orEmpty()
+        }?.let { tint(it, textColor = accent) }
+        tint(SnyggElementRule(FlorisImeUi.KeyPopupBox.elementName), fillColor = surfaceVariant)
+        tint(SnyggElementRule(FlorisImeUi.KeyPopupElement.elementName, selector = SnyggSelector.FOCUS),
+            fillColor = accent)
+        tint(SnyggElementRule(FlorisImeUi.SmartbarExtendedActionsToggle.elementName),
+            textColor = onSurfaceVariant)
+        tint(SnyggElementRule(FlorisImeUi.SmartbarActionKey.elementName), textColor = onSurface)
+        tint(SnyggElementRule(FlorisImeUi.SmartbarCandidateClip.elementName), textColor = onSurface)
+        tint(SnyggElementRule(FlorisImeUi.OneHandedPanel.elementName),
+            textColor = onBackground, fillColor = backgroundVariant)
+        rules.keys.filterIsInstance<SnyggElementRule>().firstOrNull { rule ->
+            rule.elementName == FlorisImeUi.SmartbarActionsEditorTile.elementName &&
+                KeyCode.DRAG_MARKER.toString() in rule.attributes[FlorisImeUi.Attr.Code].orEmpty()
+        }?.let { tint(it, textColor = danger) }
     }.build()
 
     return EmbeddedKeyboardTheme(stylesheet)

@@ -16,6 +16,11 @@ The fork's integration surface is intentionally small:
   `FlorisImeUiSpec`. There is no embedded theme editor, import UI, or user-controlled
   arbitrary stylesheet surface.
 
+PhoneUI builds that stylesheet from its current Omalauncher palette. Bridge theme
+changes update the embedded keyboard while it is open, including key popups and
+other FlorisBoard surfaces with fixed colors in the upstream base style. Launcher
+search uses the user's selected Android keyboard instead of the hosted-editor IME.
+
 ## Session runtime behavior
 
 LATERAL_ precomposes the hidden PhoneUI keyboard view during application startup.
