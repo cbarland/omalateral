@@ -46,6 +46,9 @@ class OmaDesktop(
         WorkspaceState.launchNew(app.component.packageName, app.component.className, app.label)
         onLaunch()
     }
+    private val linuxWindowDisplay: () -> Int? = {
+        activity.display?.displayId?.takeIf { it != Display.DEFAULT_DISPLAY }
+    }
     private val appearance: () -> Unit = {
         val selected = InputSettings.theme.id
         if (runtime.themes.picked != selected) {
@@ -94,6 +97,7 @@ class OmaDesktop(
 
     init {
         runtime.androidLauncher = launch
+        runtime.linuxWindowDisplayId = linuxWindowDisplay
         // The embedded desktop is ready without the optional Linux onboarding.
         runtime.finishWelcome()
         runtime.start()
@@ -125,6 +129,11 @@ class OmaDesktop(
         return true
     }
     override fun themes() { state.styleOpen = true }
+    override fun terminal(): Boolean {
+        if (!runtime.bootstrap.isInstalled) return false
+        runtime.terminal(null, "Terminal")
+        return true
+    }
 
     override fun dismissPanels() {
         // A queued Compose prompt request can otherwise refocus search after the
@@ -156,6 +165,7 @@ class OmaDesktop(
         visible(false)
         InputSettings.removeAppearanceListener(appearance)
         if (runtime.androidLauncher === launch) runtime.androidLauncher = null
+        if (runtime.linuxWindowDisplayId === linuxWindowDisplay) runtime.linuxWindowDisplayId = null
         view.disposeComposition()
     }
 

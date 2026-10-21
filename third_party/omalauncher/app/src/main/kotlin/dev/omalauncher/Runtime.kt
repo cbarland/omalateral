@@ -1,6 +1,7 @@
 package dev.omalauncher
 
 import android.app.ActivityManager
+import android.app.ActivityOptions
 import android.content.ComponentCallbacks
 import android.content.Context
 import android.content.res.Configuration
@@ -66,6 +67,8 @@ import kotlin.concurrent.thread
 class Runtime(
     private val context: Context,
 ) {
+    /** Embedded desktop windows follow its display; the phone controller never owns this Linux runtime. */
+    var linuxWindowDisplayId: (() -> Int?)? = null
     /** Host routes Android apps into its external workspace when attached. */
     var androidLauncher: ((AndroidApp) -> Unit)? = null
 
@@ -167,6 +170,7 @@ class Runtime(
                     "btop" -> "BtopWindow"
                     else -> agentOf(window?.appId.orEmpty(), name)?.windowAlias ?: "LinuxWindowActivity"
                 }
+            val displayId = linuxWindowDisplayId?.invoke()
             context.startActivity(
                 Intent()
                     .setClassName(context, "dev.omalauncher.$activity")
@@ -175,6 +179,7 @@ class Runtime(
                         Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT or
                             Intent.FLAG_ACTIVITY_MULTIPLE_TASK,
                     ),
+                displayId?.let { ActivityOptions.makeBasic().apply { launchDisplayId = it }.toBundle() },
             )
         }
     }

@@ -1475,7 +1475,7 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             OmarchyCommand.MENU -> if (workspaceMenu?.isShowing == true) workspaceMenu?.dismiss() else showWorkspaceMenu()
             OmarchyCommand.SEARCH -> showLauncher()
             OmarchyCommand.APPS -> showAppsPane()
-            OmarchyCommand.TERMINAL -> launchRoleApp("terminal")
+            OmarchyCommand.TERMINAL -> if (omaDesktop?.terminal() != true) launchRoleApp("terminal")
             OmarchyCommand.BROWSER -> launchRoleApp("browser")
             OmarchyCommand.FILES -> launchRoleApp("files")
             OmarchyCommand.CLOSE -> task?.let(::closeTask)
@@ -1602,7 +1602,9 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
         val commands = buildList {
             add(WorkspaceCommand("APPLICATIONS", "Omalauncher app pane · Super+D", run = ::showAppsPane))
             add(WorkspaceCommand("SEARCH / AGENT", "Omalauncher prompt · Super+A", run = ::showLauncher))
-            add(WorkspaceCommand("TERMINAL", "Open an installed terminal · Super+Return") { launchRoleApp("terminal") })
+            add(WorkspaceCommand("TERMINAL", "Open Omalauncher Linux or an installed terminal · Super+Return") {
+                if (omaDesktop?.terminal() != true) launchRoleApp("terminal")
+            })
             add(WorkspaceCommand("BROWSER", "Open your Android browser · Super+Shift+Return") { launchRoleApp("browser") })
             add(WorkspaceCommand("WINDOWS", "Find a window on any workspace", run = ::showWindowSwitcher))
             add(WorkspaceCommand("WINDOW CONTROLS", "Floating, fullscreen, grouping and workspace moves", WorkspaceState.focusedTaskId != null) { cards[WorkspaceState.focusedTaskId]?.onWindowMenu?.invoke() })
@@ -1695,6 +1697,10 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     private fun showInputSettings() {
         hideLauncher()
+        if (!phoneViewSession) {
+            openSettingsOnPhone(MainActivity.ACTION_INPUT_SETTINGS)
+            return
+        }
         InputSettingsPanel.show(
             context = this,
             onModalVisibilityChanged = { visible -> cursorOverlay.visibility = if (phoneViewSession) View.GONE else if (visible) View.INVISIBLE else View.VISIBLE },
@@ -1705,6 +1711,10 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
 
     private fun showExternalDisplaySettings() {
         hideLauncher()
+        if (!phoneViewSession) {
+            openSettingsOnPhone(MainActivity.ACTION_DISPLAY_SETTINGS)
+            return
+        }
         HostedTextInputSession.close()
         ExternalDisplayPanel.show(
             context = this,
@@ -1785,6 +1795,19 @@ class BeastActivity : AppCompatActivity(), DisplayManager.DisplayListener, Beast
             onDialogWindowCreated = ::attachModalCursorOverlay,
             onDialogWindowDismissed = ::detachModalCursorOverlay,
         )
+    }
+
+    private fun openSettingsOnPhone(action: String) {
+        MainActivity.restorePhoneUiAfterExternalTaskBatch()
+        runCatching {
+            startActivity(Intent(this, MainActivity::class.java).apply {
+                this.action = action
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }, ActivityOptions.makeBasic().apply { launchDisplayId = Display.DEFAULT_DISPLAY }.toBundle())
+            schedulePhoneUiFocusRepair()
+        }.onFailure {
+            android.widget.Toast.makeText(this, it.message ?: "Could not open phone settings", android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 
     /** Android dialogs are separate windows; mirror the workspace cursor into each one. */

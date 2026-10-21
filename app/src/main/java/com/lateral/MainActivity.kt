@@ -43,6 +43,8 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
     companion object {
         val ACTION_BEAST_LAUNCHER_SEARCH = BuildConfig.APPLICATION_ID + ".action.BEAST_LAUNCHER_SEARCH"
         val ACTION_PHONE_FOCUS_REPAIR = BuildConfig.APPLICATION_ID + ".action.PHONE_FOCUS_REPAIR"
+        val ACTION_INPUT_SETTINGS = BuildConfig.APPLICATION_ID + ".action.INPUT_SETTINGS"
+        val ACTION_DISPLAY_SETTINGS = BuildConfig.APPLICATION_ID + ".action.DISPLAY_SETTINGS"
         private const val WORKSPACE_GUARD_INTERVAL_MS = 350L
         private const val WORKSPACE_RELAUNCH_GUARD_MS = 1200L
         private const val PHONE_GESTURE_GUARD_DP = 24
@@ -303,7 +305,8 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         updateExternalDisplay()
         // A Beast that was already plugged in before the PhoneUI launched will not
         // generate onDisplayAdded(), so explicitly enter its selector here as well.
-        if (externalDisplay != null && intent?.action !in listOf(ACTION_BEAST_LAUNCHER_SEARCH, com.lateral.beast.ExternalDesktopConsent.ACTION)) {
+        if (externalDisplay != null && intent?.action !in listOf(ACTION_BEAST_LAUNCHER_SEARCH, ACTION_INPUT_SETTINGS,
+                ACTION_DISPLAY_SETTINGS, com.lateral.beast.ExternalDesktopConsent.ACTION)) {
             ensureExternalWorkspace(
                 workspaceAction = BeastActivity.ACTION_ENSURE_WORKSPACE,
             )
@@ -316,6 +319,8 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         if (intent?.action == ACTION_BEAST_LAUNCHER_SEARCH) {
             window.decorView.post(::showBeastLauncherSearchOnPhone)
         }
+        if (intent?.action == ACTION_INPUT_SETTINGS) window.decorView.post(::showInputSettings)
+        if (intent?.action == ACTION_DISPLAY_SETTINGS) window.decorView.post(::showExternalDisplaySettings)
         if (intent?.action == com.lateral.beast.ExternalDesktopConsent.ACTION) {
             window.decorView.post { com.lateral.beast.ExternalDesktopConsent.show(this) }
         }
@@ -342,6 +347,10 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
                 // Beast already owns the open launcher. Re-ensuring it here creates a
                 // second cross-display focus transition and can hide either UI.
                 showBeastLauncherSearchOnPhone()
+            } else if (intent.action == ACTION_INPUT_SETTINGS) {
+                showInputSettings()
+            } else if (intent.action == ACTION_DISPLAY_SETTINGS) {
+                showExternalDisplaySettings()
             } else {
                 updateExternalDisplay()
                 externalDisplay?.let { display ->
@@ -892,7 +901,7 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
         HostedTextInputSession.close()
         val focusLease = acquirePhoneWindowFocus()
         val entries = arrayOf(
-            "Open Android settings on Beast",
+            "Open Android settings on phone",
             "Privileged helper",
             "Advanced window controls",
         )
@@ -1243,21 +1252,18 @@ class MainActivity : AppCompatActivity(), DisplayManager.DisplayListener {
 
     private fun launchSettings() {
 
-        val display = externalDisplay ?: return
-
         val intent = Intent(Settings.ACTION_SETTINGS).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
         }
 
         val options = ActivityOptions.makeBasic().apply {
-            launchDisplayId = display.displayId
+            launchDisplayId = Display.DEFAULT_DISPLAY
         }
 
         try {
             startActivity(intent, options.toBundle())
             currentAppText.text =
-                "Settings → Display ${display.displayId}"
+                "Settings → phone"
         } catch (e: Exception) {
             Toast.makeText(
                 this,

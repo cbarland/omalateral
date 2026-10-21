@@ -102,6 +102,7 @@ internal class ExternalOmaDesktop private constructor(
     private var local: DesktopSession? = null
     private var overlay = false
     private var supportsHomeMenu = false
+    private var supportsLinuxLaunch = false
     private var desiredWorkspace = 1
     private var sentWorkspace: Int? = null
     var sessionId: String? = null
@@ -206,7 +207,9 @@ internal class ExternalOmaDesktop private constructor(
 
     private fun bind() {
         if (closed || bound) return
-        bound = runCatching { activity.bindService(Intent(ACTION).setPackage(provider), connection, Context.BIND_AUTO_CREATE) }.getOrDefault(false)
+        val flags = Context.BIND_AUTO_CREATE or
+            (if (Build.VERSION.SDK_INT >= 34) Context.BIND_ALLOW_ACTIVITY_STARTS else 0)
+        bound = runCatching { activity.bindService(Intent(ACTION).setPackage(provider), connection, flags) }.getOrDefault(false)
         if (!bound) nextProvider()
     }
 
@@ -218,6 +221,7 @@ internal class ExternalOmaDesktop private constructor(
         bound = false
         bridge = null
         supportsHomeMenu = false
+        supportsLinuxLaunch = false
     }
 
     private fun nextProvider() {
@@ -249,6 +253,7 @@ internal class ExternalOmaDesktop private constructor(
                                 nextProvider(); return@post
                             }
                             supportsHomeMenu = "home_menu" in capabilities
+                            supportsLinuxLaunch = "linux_launch" in capabilities
                             when (negotiated.getString("status")) {
                                 "ready" -> mountSurface()
                                 "consent_required" -> {
@@ -479,6 +484,7 @@ internal class ExternalOmaDesktop private constructor(
         val oldSurface = surface
         surface = null
         remote = null; sessionId = null; remoteDisplayId = -1; details = Bundle()
+        supportsLinuxLaunch = false
         sentWorkspace = null
         old?.let(::closeSessionAsync)
         if (oldSurface?.parent === view) view.removeView(oldSurface)
@@ -519,10 +525,21 @@ internal class ExternalOmaDesktop private constructor(
         return true
     }
     override fun themes() { if (local != null) local!!.themes() else report("Choose a theme in Omalauncher on the phone; the workspace follows it automatically") }
+    override fun terminal(): Boolean {
+        local?.let { return it.terminal() }
+        if (remote == null || !supportsLinuxLaunch) return false
+        sendRemote { action("terminal") }
+        return true
+    }
     override fun dismissPanels() { local?.dismissPanels(); sendRemote { action("dismiss") }; onOverlay(false) }
     override fun key(event: KeyEvent): Boolean {
         local?.let { return it.key(event) }
-        if (event.isMetaPressed && event.keyCode in listOf(KeyEvent.KEYCODE_SPACE, KeyEvent.KEYCODE_A)) {
+        if (event.isMetaPressed && event.keyCode in listOf(KeyEvent.KEYCODE_SPACE, KeyEvent.KEYCODE_A, KeyEvent.KEYCODE_ENTER)) {
+            if (event.keyCode == KeyEvent.KEYCODE_ENTER) {
+                if (remote == null || !supportsLinuxLaunch) return false
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) terminal()
+                return true
+            }
             if (event.action == KeyEvent.ACTION_DOWN) { sendRemote { action("search") }; LauncherSearchSession.begin() }
             return true
         }

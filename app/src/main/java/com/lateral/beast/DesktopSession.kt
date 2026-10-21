@@ -13,6 +13,7 @@ interface DesktopSession {
     fun workspace(number: Int) = Unit
     fun homeMenu(): Boolean = false
     fun themes()
+    fun terminal(): Boolean = false
     fun dismissPanels()
     fun key(event: KeyEvent): Boolean
     fun hover(x: Int, y: Int) = Unit

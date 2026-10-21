@@ -1,6 +1,7 @@
 package com.lateral.beast
 
 import android.content.Context
+import android.content.ComponentName
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
@@ -19,6 +20,10 @@ object AndroidTaskSynchronizer {
     private var inFlight = false
     private var firstSnapshot = true
     private var homePackages = emptySet<String>()
+    private val omaDesktopActivities = HashMap<ComponentName, Boolean>()
+    private val omaDesktopTaskClasses = setOf(
+        "dev.omalauncher.LinuxWindowActivity", "dev.omalauncher.FilesActivity", "dev.omalauncher.EditorActivity",
+    )
 
     private val privilegedListener: () -> Unit = {
         main.post {
@@ -69,8 +74,7 @@ object AndroidTaskSynchronizer {
             inFlight = false
             if (raw == null || expectedGeneration != PrivilegedService.helperGeneration || !PrivilegedService.isBridgeReady()) return@queryTaskSnapshots
             val snapshots = raw.asSequence()
-                .filter { it.packageName != appContext.packageName }
-                .filter { it.packageName !in homePackages }
+                .filter { isOmalauncherDesktopTask(it) || (it.packageName != appContext.packageName && it.packageName !in homePackages) }
                 .filterNot(PrivilegedService.TaskSnapshot::excluded)
                 .filter(PrivilegedService.TaskSnapshot::isAvailable)
                 .filter { isInstalledAndEnabled(it.packageName) }
@@ -89,6 +93,17 @@ object AndroidTaskSynchronizer {
         }
     }
 
+    /** Linux windows, Files and Editor are tasks even when their package also owns the home screen. */
+    internal fun isOmalauncherDesktopTask(task: PrivilegedService.TaskSnapshot): Boolean {
+        if (task.packageName != appContext.packageName && task.packageName !in homePackages) return false
+        val component = ComponentName(task.packageName, task.activityName)
+        return omaDesktopActivities.getOrPut(component) {
+            task.activityName in omaDesktopTaskClasses || runCatching {
+                appContext.packageManager.getActivityInfo(component, 0).targetActivity in omaDesktopTaskClasses
+            }.getOrDefault(false)
+        }
+    }
+
     /** Vendor recents can retain rows for packages unavailable to the current user. */
     private fun isInstalledAndEnabled(packageName: String): Boolean = runCatching {
         appContext.packageManager.getApplicationInfo(packageName, 0).enabled
@@ -97,7 +112,7 @@ object AndroidTaskSynchronizer {
     private fun applyLabels(snapshots: List<PrivilegedService.TaskSnapshot>) {
         val packageManager = appContext.packageManager
         snapshots.forEach { snapshot ->
-            val label = runCatching {
+            val label = snapshot.title.takeIf { isOmalauncherDesktopTask(snapshot) && it.isNotBlank() } ?: runCatching {
                 packageManager.getApplicationLabel(
                     packageManager.getApplicationInfo(snapshot.packageName, 0),
                 ).toString()
